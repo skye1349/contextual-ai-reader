@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-label="Full note translation command preview">
+  <rect width="1200" height="620" fill="#20242c"/>
+  <rect x="70" y="60" width="500" height="500" rx="10" fill="#171b22" stroke="#3b424d"/>
+  <text x="100" y="120" fill="#e7ebf2" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Command Palette</text>
+  <rect x="100" y="158" width="420" height="56" rx="8" fill="#2a303a"/>
+  <text x="122" y="194" fill="#cfd6df" font-family="Inter, Arial, sans-serif" font-size="22">Translate current Markdown...</text>
+  <rect x="100" y="245" width="420" height="72" rx="8" fill="#29313d"/>
+  <text x="122" y="276" fill="#f4f7fb" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="700">append Chinese below</text>
+  <text x="122" y="302" fill="#aeb6c2" font-family="Inter, Arial, sans-serif" font-size="17">English first, Chinese after the note</text>
+  <rect x="100" y="335" width="420" height="72" rx="8" fill="#29313d"/>
+  <text x="122" y="366" fill="#f4f7fb" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="700">interleave Chinese paragraphs</text>
+  <text x="122" y="392" fill="#aeb6c2" font-family="Inter, Arial, sans-serif" font-size="17">Chinese after each English paragraph</text>
+  <rect x="650" y="60" width="470" height="500" rx="10" fill="#262b34"/>
+  <text x="690" y="125" fill="#e7ebf2" font-family="Inter, Arial, sans-serif" font-size="32" font-weight="700">Result</text>
+  <text x="690" y="190" fill="#d4dae3" font-family="Inter, Arial, sans-serif" font-size="22">English paragraph...</text>
+  <text x="690" y="250" fill="#f0f3f7" font-family="Inter, Arial, sans-serif" font-size="22">中文段落...</text>
+  <text x="690" y="330" fill="#d4dae3" font-family="Inter, Arial, sans-serif" font-size="22">Next English paragraph...</text>
+  <text x="690" y="390" fill="#f0f3f7" font-family="Inter, Arial, sans-serif" font-size="22">下一段中文...</text>
+  <text x="70" y="590" fill="#89909c" font-family="Inter, Arial, sans-serif" font-size="20">Full-note translation writes back to the current Markdown file.</text>
+</svg>

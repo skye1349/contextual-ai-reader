@@ -1,0 +1,25 @@
+{
+  "name": "codex-local-translator",
+  "version": "1.0.0",
+  "description": "Local Obsidian translator powered by the logged-in Codex CLI.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+  },
+  "keywords": [
+    "obsidian",
+    "codex",
+    "translation"
+  ],
+  "author": "Codex Local Translator contributors",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "builtin-modules": "^4.0.0",
+    "esbuild": "^0.25.5",
+    "obsidian": "^1.8.7",
+    "tslib": "^2.8.1",
+    "typescript": "^5.8.3"
+  }
+}

@@ -1,0 +1,77 @@
+.codex-local-translator-popover {
+  position: absolute;
+  z-index: 1000;
+  box-sizing: border-box;
+  width: min(560px, calc(100vw - 24px));
+  max-height: min(320px, calc(100vh - 24px));
+  overflow: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary-alt);
+  box-shadow: var(--shadow-l);
+  color: var(--text-normal);
+  font-size: 16px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.codex-local-translator-popover.is-loading {
+  color: var(--text-muted);
+}
+
+.codex-local-translator-popover.is-error {
+  border-color: var(--text-error);
+  color: var(--text-error);
+}
+
+.codex-local-translator-body {
+  user-select: text;
+}
+
+.codex-local-translator-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.codex-local-translator-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+.codex-local-translator-button:hover {
+  color: var(--text-normal);
+}
+
+.codex-local-translator-settings-textarea {
+  min-width: 360px;
+  min-height: 120px;
+}
+
+.codex-local-translator-batch-description {
+  margin-top: 0;
+  color: var(--text-muted);
+}
+
+.codex-local-translator-batch-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  font-family: var(--font-monospace);
+}
+
+.codex-local-translator-batch-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}

@@ -1,0 +1,21 @@
+node_modules/
+.DS_Store
+
+# Local Obsidian/plugin state
+data.json
+.obsidian/
+
+# Local-only helper scripts and private paths
+sync-trading-zone-to-icloud.sh
+*.local.sh
+
+# Secrets and environment files
+.env
+.env.*
+!.env.example
+
+# Build/tooling noise
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

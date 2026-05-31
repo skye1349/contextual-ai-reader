@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-label="Batch translation modal preview">
+  <rect width="1200" height="620" fill="#1f232b"/>
+  <rect x="240" y="80" width="720" height="460" rx="16" fill="#171b22" stroke="#555d69" stroke-width="2"/>
+  <text x="292" y="150" fill="#edf1f7" font-family="Inter, Arial, sans-serif" font-size="31" font-weight="700">Batch translate: interleave Chinese paragraphs</text>
+  <text x="292" y="205" fill="#aeb6c2" font-family="Inter, Arial, sans-serif" font-size="21">Enter one Markdown file, folder, or wildcard per line.</text>
+  <rect x="292" y="240" width="616" height="190" rx="8" fill="#262b34" stroke="#69717d" stroke-width="2"/>
+  <text x="322" y="290" fill="#e7ebf2" font-family="Menlo, Consolas, monospace" font-size="21">Books/Example Book/</text>
+  <text x="322" y="330" fill="#e7ebf2" font-family="Menlo, Consolas, monospace" font-size="21">Books/Example Book/*.md</text>
+  <text x="322" y="370" fill="#e7ebf2" font-family="Menlo, Consolas, monospace" font-size="21">Books/Example Book/**/*.md</text>
+  <rect x="705" y="465" width="90" height="48" rx="8" fill="#303640"/>
+  <text x="724" y="496" fill="#d5dbe4" font-family="Inter, Arial, sans-serif" font-size="20">Cancel</text>
+  <rect x="815" y="465" width="93" height="48" rx="8" fill="#bce8cb"/>
+  <text x="838" y="496" fill="#11161b" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="700">Start</text>
+  <text x="240" y="585" fill="#89909c" font-family="Inter, Arial, sans-serif" font-size="20">Batch mode processes matching Markdown files one by one.</text>
+</svg>
