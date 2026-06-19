@@ -1,5 +1,5 @@
 import { spawn } from "child_process";
-import { existsSync } from "fs";
+import { existsSync, readdirSync } from "fs";
 import { mkdtemp, readFile, rm } from "fs/promises";
 import { homedir, tmpdir } from "os";
 import { join } from "path";
@@ -21,9 +21,14 @@ import {
 type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
 type InsertMode = "replace" | "append";
 type FullDocumentInsertMode = "append" | "interleave";
+type AIBackend = "codex" | "claude";
 
 interface CodexTranslatorSettings {
+  aiBackend: AIBackend;
   autoTranslate: boolean;
+  batchChunkChars: number;
+  claudeCommand: string;
+  claudeModel: string;
   codexCommand: string;
   customPrompt: string;
   debounceMs: number;
@@ -34,13 +39,18 @@ interface CodexTranslatorSettings {
   openExcerptAfterSave: boolean;
   reasoningEffort: ReasoningEffort;
   requireCommandForAutoTranslate: boolean;
+  singleShotMaxChars: number;
   speechLanguage: string;
   speechRate: number;
   timeoutSeconds: number;
 }
 
 const DEFAULT_SETTINGS: CodexTranslatorSettings = {
+  aiBackend: "codex",
   autoTranslate: true,
+  batchChunkChars: 4000,
+  claudeCommand: "",
+  claudeModel: "claude-sonnet-4-5",
   codexCommand: "",
   customPrompt: "",
   debounceMs: 450,
@@ -50,6 +60,7 @@ const DEFAULT_SETTINGS: CodexTranslatorSettings = {
   model: "gpt-5.4-mini",
   openExcerptAfterSave: true,
   reasoningEffort: "none",
+  singleShotMaxChars: 12000,
   requireCommandForAutoTranslate: true,
   speechLanguage: "en-US",
   speechRate: 0.92,
@@ -73,6 +84,31 @@ const CODEX_PATH_ENTRIES = [
   "/sbin"
 ];
 
+function buildClaudeCandidates(): string[] {
+  const home = process.env.HOME || homedir();
+  const candidates: string[] = [
+    "/opt/homebrew/bin/claude",
+    "/usr/local/bin/claude",
+    `${home}/.claude/local/claude`
+  ];
+
+  // Claude Code desktop app ships a native macOS binary inside the .app bundle
+  const claudeCodeBase = `${home}/Library/Application Support/Claude/claude-code`;
+  try {
+    const versions = readdirSync(claudeCodeBase).sort().reverse();
+    for (const version of versions) {
+      candidates.push(`${claudeCodeBase}/${version}/claude.app/Contents/MacOS/claude`);
+    }
+  } catch {
+    // directory doesn't exist
+  }
+
+  candidates.push("claude");
+  return candidates;
+}
+
+const CLAUDE_CANDIDATES = buildClaudeCandidates();
+
 interface SourceReference {
   endLine?: number;
   line?: number;
@@ -84,10 +120,29 @@ interface MarkdownBlock {
   text: string;
 }
 
+interface ClaudeJsonResult {
+  result: string;
+  usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
+}
+
+interface TokenUsage {
+  input: number;
+  output: number;
+}
+
 export default class CodexLocalTranslatorPlugin extends Plugin {
   settings: CodexTranslatorSettings = DEFAULT_SETTINGS;
   private autoTimer?: number;
   private commandSelectionGestureUntil = 0;
+  private currentKills = new Set<() => void>();
+  private operationCancelled = false;
+  private sessionTokens: TokenUsage = { input: 0, output: 0 };
+  private onTokensUpdate?: (tokens: TokenUsage) => void;
   private isCommandKeyPressed = false;
   private popupEl?: HTMLDivElement;
   private popupRect?: DOMRect;
@@ -288,29 +343,75 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
       return;
     }
 
-    this.showPopup("Translating with local Codex...", sourceText, rect, "loading");
+    // Step 1: instant Google Translate (~200ms, 0 tokens)
+    this.showPopupLoading("Translating…", rect, () => { this.hidePopup(); });
 
     try {
-      const translation = (await this.runCodexTranslation(sourceText)).trim();
+      const quickResult = await googleTranslate(sourceText);
+      if (requestId !== this.requestSerial) return;
+      if (!quickResult) throw new Error("Empty response from Google Translate.");
 
-      if (requestId !== this.requestSerial) {
-        return;
-      }
+      this.rememberTranslation(sourceText, quickResult);
+      this.showPopup(quickResult, sourceText, rect, "done");
+      this.addPopupRefineButton(sourceText, rect, requestId);
+    } catch {
+      // Google Translate unavailable — fall back to AI directly
+      if (requestId !== this.requestSerial) return;
+      void this.translateSelectionToPopupWithAI(sourceText, rect, requestId);
+    }
+  }
 
-      if (!translation) {
-        throw new Error("Codex returned an empty translation.");
-      }
+  private async translateSelectionToPopupWithAI(sourceText: string, rect: DOMRect, requestId: number) {
+    const backendLabel = this.settings.aiBackend === "claude" ? "Claude Code" : "Codex";
+    this.showPopupLoading(backendLabel, rect, () => {
+      this.stopCurrentTranslation();
+      this.hidePopup();
+    });
+    this.startOperation((tokens) => {
+      if (requestId !== this.requestSerial) return;
+      this.updatePopupTokens(tokens);
+    });
+    const startTime = Date.now();
+    const timerInterval = window.setInterval(() => {
+      if (requestId !== this.requestSerial) { window.clearInterval(timerInterval); return; }
+      this.updatePopupTimer(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
 
+    try {
+      const translation = (await this.runAITranslation(sourceText)).trim();
+      window.clearInterval(timerInterval);
+      if (requestId !== this.requestSerial) return;
+      if (!translation) throw new Error(`${backendLabel} returned an empty translation.`);
       this.rememberTranslation(sourceText, translation);
       this.showPopup(translation, sourceText, rect, "done");
     } catch (error) {
-      if (requestId !== this.requestSerial) {
-        return;
-      }
-
-      this.showPopup(`Codex translation failed: ${getErrorMessage(error)}`, sourceText, rect, "error");
-      console.error("Codex translation failed", error);
+      window.clearInterval(timerInterval);
+      if (requestId !== this.requestSerial) return;
+      this.showPopup(`Translation failed: ${getErrorMessage(error)}`, sourceText, rect, "error");
+      console.error("Translation failed", error);
     }
+  }
+
+  private addPopupRefineButton(sourceText: string, rect: DOMRect, requestId: number) {
+    const popup = this.popupEl;
+    if (!popup) return;
+    const actions = popup.querySelector<HTMLElement>(".codex-local-translator-actions");
+    if (!actions) return;
+
+    const refineBtn = document.createElement("button");
+    refineBtn.type = "button";
+    refineBtn.className = "codex-local-translator-refine-btn";
+    const label = this.settings.aiBackend === "claude" ? "✦ Claude" : "✦ Codex";
+    refineBtn.setText(label);
+    refineBtn.title = "Refine translation with AI";
+    refineBtn.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); });
+    refineBtn.addEventListener("click", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      refineBtn.remove();
+      void this.translateSelectionToPopupWithAI(sourceText, rect, requestId);
+    });
+
+    actions.insertBefore(refineBtn, actions.firstChild);
   }
 
   private async translateSelection(editor: Editor, mode: InsertMode) {
@@ -321,14 +422,30 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
       return;
     }
 
-    this.setStatus("Codex translating...");
-    new Notice("Translating with local Codex...");
+    const backendLabel = this.settings.aiBackend === "claude" ? "Claude Code" : "Codex";
+    const overlay = new TranslationProgressOverlay(
+      this.app.workspace.containerEl,
+      backendLabel,
+      () => { this.stopCurrentTranslation(); }
+    );
+    this.startOperation((tokens) => overlay.setTokens(tokens));
+    this.setStatus(`${backendLabel} translating...`);
+
+    const startTime = Date.now();
+    const timerInterval = window.setInterval(() => {
+      overlay.setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
 
     try {
-      const translation = await this.runCodexTranslation(selection);
+      const translation = await this.runAITranslation(selection, (chunk) => {
+        overlay.appendChunk(chunk);
+      });
+
+      window.clearInterval(timerInterval);
+      overlay.remove();
 
       if (!translation.trim()) {
-        throw new Error("Codex returned an empty translation.");
+        throw new Error(`${backendLabel} returned an empty translation.`);
       }
 
       if (mode === "append") {
@@ -339,8 +456,10 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
 
       new Notice("Translation complete.");
     } catch (error) {
-      new Notice(`Codex translation failed: ${getErrorMessage(error)}`);
-      console.error("Codex translation failed", error);
+      window.clearInterval(timerInterval);
+      overlay.remove();
+      new Notice(`Translation failed: ${getErrorMessage(error)}`);
+      console.error("Translation failed", error);
     } finally {
       this.setStatus("");
     }
@@ -363,14 +482,28 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
     }
 
     this.hidePopup();
-    const notice = new Notice("Preparing full-file translation...", 0);
-    this.setStatus("Codex translating file...");
+    const backendLabel = this.settings.aiBackend === "claude" ? "Claude Code" : "Codex";
+    const overlay = new TranslationProgressOverlay(
+      this.app.workspace.containerEl,
+      backendLabel,
+      () => { this.stopCurrentTranslation(); }
+    );
+    this.startOperation((tokens) => overlay.setTokens(tokens));
+    const startTime = Date.now();
+    const timerInterval = window.setInterval(() => {
+      overlay.setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+    this.setStatus(`${backendLabel} translating file...`);
 
     try {
-      const translatedContent = await this.translateMarkdownDocument(sourceText, notice, "current file");
+      const translatedContent = await this.translateMarkdownDocument(sourceText, overlay, "current file");
+
+      if (this.isCancelled) {
+        throw new Error("Translation stopped.");
+      }
 
       if (!translatedContent.fullText.trim()) {
-        throw new Error("Codex returned an empty translation.");
+        throw new Error("AI returned an empty translation.");
       }
 
       const nextContent = mode === "append"
@@ -393,14 +526,15 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
         await this.app.vault.modify(file, nextContent);
       }
 
-      notice.setMessage(mode === "append"
+      new Notice(mode === "append"
         ? "Chinese translation appended below the current file."
         : "Chinese translation inserted after each paragraph.");
     } catch (error) {
-      notice.setMessage(`Codex translation failed: ${getErrorMessage(error)}`);
-      console.error("Codex file translation failed", error);
+      new Notice(`Translation failed: ${getErrorMessage(error)}`);
+      console.error("File translation failed", error);
     } finally {
-      window.setTimeout(() => notice.hide(), 5000);
+      window.clearInterval(timerInterval);
+      overlay.remove();
       this.setStatus("");
     }
   }
@@ -414,19 +548,31 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
     }
 
     this.hidePopup();
-    const notice = new Notice(`Batch translating ${files.length} Markdown files...`, 0);
-    this.setStatus(`Codex batch translating 0/${files.length}`);
+    const backendLabel = this.settings.aiBackend === "claude" ? "Claude Code" : "Codex";
+    const overlay = new TranslationProgressOverlay(
+      this.app.workspace.containerEl,
+      backendLabel,
+      () => { this.stopCurrentTranslation(); }
+    );
+    this.startOperation((tokens) => overlay.setTokens(tokens));
+    const startTime = Date.now();
+    const timerInterval = window.setInterval(() => {
+      overlay.setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+    this.setStatus(`${backendLabel} batch translating 0/${files.length}`);
 
     let changedCount = 0;
     const failures: string[] = [];
 
     for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+      if (this.isCancelled) break;
+
       const file = files[fileIndex];
-      const fileLabel = `${fileIndex + 1}/${files.length}: ${file.path}`;
+      const fileLabel = `${fileIndex + 1}/${files.length}`;
 
       try {
-        notice.setMessage(`Translating file ${fileLabel}`);
-        this.setStatus(`Codex batch translating ${fileIndex + 1}/${files.length}`);
+        overlay.setStatus(`File ${fileLabel}: ${file.name}`);
+        this.setStatus(`${backendLabel} batch translating ${fileIndex + 1}/${files.length}`);
 
         const sourceText = await this.app.vault.read(file);
 
@@ -434,10 +580,12 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
           continue;
         }
 
-        const translatedContent = await this.translateMarkdownDocument(sourceText, notice, `file ${fileIndex + 1}/${files.length}`);
+        const translatedContent = await this.translateMarkdownDocument(sourceText, overlay, fileLabel);
+
+        if (this.isCancelled) break;
 
         if (!translatedContent.fullText.trim()) {
-          throw new Error("Codex returned an empty translation.");
+          throw new Error(`${backendLabel} returned an empty translation.`);
         }
 
         const nextContent = mode === "append"
@@ -453,16 +601,21 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
         await this.app.vault.modify(file, nextContent);
         changedCount++;
       } catch (error) {
+        if (this.isCancelled) break;
         failures.push(`${file.path}: ${getErrorMessage(error)}`);
-        console.error("Codex batch file translation failed", file.path, error);
+        console.error("Batch file translation failed", file.path, error);
       }
     }
 
-    const summary = failures.length === 0
-      ? `Batch translation complete: ${changedCount}/${files.length} files updated.`
-      : `Batch translation finished: ${changedCount}/${files.length} files updated, ${failures.length} failed. Check console for details.`;
-    notice.setMessage(summary);
-    window.setTimeout(() => notice.hide(), failures.length === 0 ? 5000 : 9000);
+    const stopped = this.isCancelled;
+    const summary = stopped
+      ? `Batch translation stopped: ${changedCount}/${files.length} files updated.`
+      : failures.length === 0
+        ? `Batch translation complete: ${changedCount}/${files.length} files updated.`
+        : `Batch translation finished: ${changedCount}/${files.length} files updated, ${failures.length} failed.`;
+    new Notice(summary, stopped || failures.length > 0 ? 9000 : 5000);
+    window.clearInterval(timerInterval);
+    overlay.remove();
     this.setStatus("");
   }
 
@@ -508,10 +661,10 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
 
   private async checkCodexLogin() {
     try {
-      const result = await runProcess(resolveCodexCommand(this.settings.codexCommand), [
+      const result = await spawnProcess(resolveCodexCommand(this.settings.codexCommand), [
         "login",
         "status"
-      ], "", 20_000);
+      ], "", 20_000).promise;
 
       if (result.code === 0) {
         new Notice("Codex login is configured.");
@@ -580,8 +733,49 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
     }
   }
 
-  private async runCodexTranslation(sourceText: string): Promise<string> {
-    return await this.runCodexPrompt(buildTranslationPrompt(sourceText, this.settings.customPrompt));
+  private async runAITranslation(sourceText: string, onChunk?: (text: string) => void): Promise<string> {
+    return await this.runAIPrompt(buildTranslationPrompt(sourceText, this.settings.customPrompt), onChunk);
+  }
+
+  private async runAIPrompt(prompt: string, onChunk?: (text: string) => void): Promise<string> {
+    if (this.settings.aiBackend === "claude") {
+      return await this.runClaudePrompt(prompt, onChunk);
+    }
+    return await this.runCodexPrompt(prompt);
+  }
+
+  private async runClaudePrompt(prompt: string, _onChunk?: (text: string) => void): Promise<string> {
+    const command = resolveClaudeCommand(this.settings.claudeCommand);
+    const model = this.settings.claudeModel || DEFAULT_SETTINGS.claudeModel;
+    // --no-session-persistence: prevents loading project CLAUDE.md/memory (saves ~80k tokens and ~10-20s per call).
+    // --output-format json: gives token usage info.
+    const args = ["--print", "--no-session-persistence", "--output-format", "json", "--model", model];
+
+    const handle = spawnProcess(command, args, prompt, this.settings.timeoutSeconds * 1000);
+    this.currentKills.add(handle.kill);
+
+    try {
+      const result = await handle.promise;
+      if (result.code !== 0) {
+        throw new Error(compactProcessError(result.stderr || result.stdout));
+      }
+
+      try {
+        const parsed = JSON.parse(result.stdout) as ClaudeJsonResult;
+        if (parsed.usage) {
+          // Only count fresh input + cache_creation (not cache_read which is near-free on plan).
+          this.sessionTokens.input += (parsed.usage.input_tokens ?? 0)
+            + (parsed.usage.cache_creation_input_tokens ?? 0);
+          this.sessionTokens.output += parsed.usage.output_tokens ?? 0;
+          this.onTokensUpdate?.({ ...this.sessionTokens });
+        }
+        return parsed.result ?? result.stdout;
+      } catch {
+        return result.stdout;
+      }
+    } finally {
+      this.currentKills.delete(handle.kill);
+    }
   }
 
   private async runCodexPrompt(prompt: string): Promise<string> {
@@ -589,7 +783,7 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
     const outputPath = join(tempDir, "translation.txt");
 
     try {
-      const result = await runProcess(
+      const handle = spawnProcess(
         resolveCodexCommand(this.settings.codexCommand),
         [
           "exec",
@@ -614,43 +808,97 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
         prompt,
         this.settings.timeoutSeconds * 1000
       );
+      this.currentKills.add(handle.kill);
 
-      if (result.code !== 0) {
-        throw new Error(compactProcessError(result.stderr || result.stdout));
+      try {
+        const result = await handle.promise;
+
+        if (result.code !== 0) {
+          throw new Error(compactProcessError(result.stderr || result.stdout));
+        }
+
+        return await readFile(outputPath, "utf8");
+      } finally {
+        this.currentKills.delete(handle.kill);
       }
-
-      return await readFile(outputPath, "utf8");
     } finally {
       await rm(tempDir, { force: true, recursive: true });
     }
   }
 
+  stopCurrentTranslation() {
+    this.operationCancelled = true;
+    this.currentKills.forEach((k) => k());
+    this.currentKills.clear();
+    this.requestSerial++;
+  }
+
+  private startOperation(onTokensUpdate?: (tokens: TokenUsage) => void) {
+    this.operationCancelled = false;
+    this.sessionTokens = { input: 0, output: 0 };
+    this.onTokensUpdate = onTokensUpdate;
+  }
+
+  private get isCancelled() {
+    return this.operationCancelled;
+  }
+
   private async translateMarkdownDocument(
     sourceText: string,
-    notice: Notice,
+    overlay: TranslationProgressOverlay,
     progressLabel: string
   ): Promise<{ blocks: MarkdownBlock[]; fullText: string; translations: string[] }> {
+    const backendLabel = this.settings.aiBackend === "claude" ? "Claude Code" : "Codex";
     const { body } = extractFrontmatter(sourceText);
     const blocks = splitMarkdownBlocks(body);
 
     if (blocks.length === 0) {
-      return {
-        blocks,
-        fullText: "",
-        translations: []
-      };
+      return { blocks, fullText: "", translations: [] };
     }
 
-    const batches = buildBlockBatches(blocks, 3500);
-    const translations: string[] = [];
+    const totalChars = blocks.reduce((sum, b) => sum + b.text.length, 0);
+    const useSingleShot = totalChars <= this.settings.singleShotMaxChars;
 
-    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-      const batch = batches[batchIndex];
-      notice.setMessage(`Translating ${progressLabel} chunk ${batchIndex + 1}/${batches.length}...`);
-      this.setStatus(`Codex translating ${batchIndex + 1}/${batches.length}`);
+    let translations: string[];
 
-      const batchTranslations = await this.translateBlockBatch(batch.map((block) => block.text));
-      translations.push(...batchTranslations);
+    if (useSingleShot) {
+      // Small file: single AI call
+      const onChunk = (chunk: string) => overlay.appendChunk(chunk);
+      overlay.setStatus(`${progressLabel} · translating ${blocks.length} paragraphs...`);
+      this.setStatus(`${backendLabel} translating...`);
+      translations = await this.translateBlockBatch(blocks.map((b) => b.text), onChunk);
+    } else {
+      // Large file: parallel AI batches (3 concurrent)
+      const batches = buildBlockBatches(blocks, this.settings.batchChunkChars);
+      const results = new Array<string[]>(batches.length);
+      let completed = 0;
+      const CONCURRENCY = 3;
+
+      let inFlight = 0;
+      const updateStatus = () => {
+        const label = inFlight > 0
+          ? `${progressLabel} · ${completed}/${batches.length} done, ${inFlight} running`
+          : `${progressLabel} · ${completed}/${batches.length} done`;
+        overlay.setStatus(label);
+        this.setStatus(`${backendLabel} ${completed}/${batches.length}`);
+      };
+
+      const queue = batches.map((batch, i) => ({ batch, i }));
+      const workers = Array.from({ length: Math.min(CONCURRENCY, batches.length) }, async () => {
+        while (queue.length > 0 && !this.isCancelled) {
+          const item = queue.shift();
+          if (!item) break;
+          inFlight++;
+          updateStatus();
+          results[item.i] = await this.translateBlockBatch(item.batch.map((b) => b.text));
+          inFlight--;
+          completed++;
+          updateStatus();
+        }
+      });
+
+      await Promise.all(workers);
+      translations = results.filter(Boolean).flat();
     }
 
     return {
@@ -660,18 +908,19 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
     };
   }
 
-  private async translateBlockBatch(blockTexts: string[]): Promise<string[]> {
+  private async translateBlockBatch(blockTexts: string[], onChunk?: (chunk: string) => void): Promise<string[]> {
     const prompt = buildBlockTranslationPrompt(blockTexts, this.settings.customPrompt);
-    const rawResult = await this.runCodexPrompt(prompt);
+    const rawResult = await this.runAIPrompt(prompt, onChunk);
 
     try {
       return parseTranslationArray(rawResult, blockTexts.length);
     } catch (error) {
-      console.warn("Codex block translation was not valid JSON; retrying blocks individually.", error);
+      console.warn("Block translation was not valid JSON; retrying blocks individually.", error);
       const translations: string[] = [];
 
       for (const blockText of blockTexts) {
-        translations.push((await this.runCodexTranslation(blockText)).trim());
+        if (this.isCancelled) break;
+        translations.push((await this.runAITranslation(blockText)).trim());
       }
 
       return translations;
@@ -761,6 +1010,75 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
         this.translationCache.delete(oldestKey);
       }
     }
+  }
+
+  private showPopupLoading(backendLabel: string, rect: DOMRect, onStop: () => void) {
+    const popup = this.ensurePopup();
+    popup.empty();
+    popup.classList.remove("is-error");
+    popup.classList.add("is-loading");
+
+    const statusRow = document.createElement("div");
+    statusRow.className = "codex-translator-status-row";
+
+    const spinner = document.createElement("span");
+    spinner.className = "codex-translator-spin";
+    spinner.setText("⟳");
+    statusRow.appendChild(spinner);
+
+    const label = document.createElement("span");
+    label.className = "codex-translator-status-label";
+    label.setText(`${backendLabel} · 0s`);
+    statusRow.appendChild(label);
+
+    const stopBtn = document.createElement("button");
+    stopBtn.type = "button";
+    stopBtn.className = "codex-local-translator-stop-btn";
+    stopBtn.setText("■ Stop");
+    stopBtn.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); });
+    stopBtn.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); onStop(); });
+    statusRow.appendChild(stopBtn);
+
+    popup.appendChild(statusRow);
+
+    const streamBody = document.createElement("div");
+    streamBody.className = "codex-translator-stream-body";
+    popup.appendChild(streamBody);
+
+    popup.style.display = "block";
+    this.positionPopup(rect);
+  }
+
+  private updatePopupTimer(secs: number) {
+    const popup = this.popupEl;
+    if (!popup) return;
+    const label = popup.querySelector<HTMLElement>(".codex-translator-status-label");
+    if (label) {
+      const text = label.getText();
+      const base = text.replace(/ · \d+s$/, "");
+      label.setText(`${base} · ${secs}s`);
+    }
+  }
+
+  private updatePopupTokens(tokens: TokenUsage) {
+    const popup = this.popupEl;
+    if (!popup) return;
+    let tokensEl = popup.querySelector<HTMLElement>(".codex-translator-popup-tokens");
+    if (!tokensEl) {
+      tokensEl = popup.querySelector<HTMLElement>(".codex-translator-status-row")
+        ?.createSpan({ cls: "codex-translator-popup-tokens" }) ?? null;
+    }
+    if (tokensEl) {
+      const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+      tokensEl.setText(`${fmt(tokens.input)}↑ ${fmt(tokens.output)}↓`);
+    }
+  }
+
+  private updatePopupStreamText(text: string) {
+    const popup = this.popupEl;
+    if (!popup) return;
+    const body = popup.querySelector<HTMLElement>(".codex-translator-stream-body");
+    if (body) body.setText(text);
   }
 
   private showPopup(text: string, sourceText: string, rect: DOMRect, state: "loading" | "done" | "error") {
@@ -869,6 +1187,84 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
   }
 }
 
+class TranslationProgressOverlay {
+  private el: HTMLDivElement;
+  private labelEl: HTMLSpanElement;
+  private tokensEl: HTMLSpanElement;
+  private textEl: HTMLDivElement;
+  private accumulated = "";
+  private readonly backendLabel: string;
+  private elapsedSecs = 0;
+  private statusText = "";
+
+  constructor(
+    container: HTMLElement,
+    backendLabel: string,
+    private readonly onStop: () => void
+  ) {
+    this.backendLabel = backendLabel;
+    this.el = container.createDiv("codex-translator-overlay");
+
+    const header = this.el.createDiv("codex-translator-overlay-header");
+
+    const spinner = header.createSpan("codex-translator-overlay-spinner");
+    spinner.setText("⟳");
+
+    this.labelEl = header.createSpan({ cls: "codex-translator-overlay-title" });
+    this.labelEl.setText(`${backendLabel} · 0s`);
+
+    this.tokensEl = header.createSpan({ cls: "codex-translator-overlay-tokens" });
+
+    const stopBtn = header.createEl("button", { cls: "codex-translator-overlay-stop" });
+    stopBtn.setText("■ Stop");
+    stopBtn.addEventListener("click", () => {
+      this.onStop();
+      this.remove();
+    });
+
+    this.textEl = this.el.createDiv("codex-translator-overlay-text");
+    this.textEl.setText("Waiting for response…");
+  }
+
+  private refreshLabel() {
+    this.labelEl.setText(
+      this.statusText
+        ? `${this.statusText} · ${this.elapsedSecs}s`
+        : `${this.backendLabel} · ${this.elapsedSecs}s`
+    );
+  }
+
+  setElapsed(secs: number) {
+    this.elapsedSecs = secs;
+    this.refreshLabel();
+  }
+
+  setStatus(text: string) {
+    this.statusText = text;
+    this.refreshLabel();
+  }
+
+  setTokens(tokens: TokenUsage) {
+    const total = tokens.input + tokens.output;
+    const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+    this.tokensEl.setText(`${fmt(tokens.input)}↑ ${fmt(tokens.output)}↓ (${fmt(total)} total)`);
+  }
+
+  appendChunk(chunk: string) {
+    this.accumulated += chunk;
+    this.textEl.setText(this.accumulated.slice(-400));
+  }
+
+  clearChunks() {
+    this.accumulated = "";
+    this.textEl.setText("Waiting for response…");
+  }
+
+  remove() {
+    this.el.remove();
+  }
+}
+
 class BatchScopeModal extends Modal {
   constructor(
     app: App,
@@ -946,6 +1342,49 @@ class CodexTranslatorSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     new Setting(containerEl)
+      .setName("AI backend")
+      .setDesc("Codex uses your ChatGPT plan. Claude Code uses your Claude plan. Both run locally with no API key.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("codex", "Codex (ChatGPT plan)")
+          .addOption("claude", "Claude Code (Claude plan)")
+          .setValue(this.plugin.settings.aiBackend)
+          .onChange(async (value) => {
+            this.plugin.settings.aiBackend = value as AIBackend;
+            await this.plugin.saveSettings();
+            this.display();
+          })
+      );
+
+    if (this.plugin.settings.aiBackend === "claude") {
+      new Setting(containerEl)
+        .setName("Claude command")
+        .setDesc("Leave empty to auto-detect the Claude Code CLI.")
+        .addText((text) =>
+          text
+            .setPlaceholder("/opt/homebrew/bin/claude")
+            .setValue(this.plugin.settings.claudeCommand)
+            .onChange(async (value) => {
+              this.plugin.settings.claudeCommand = value.trim();
+              await this.plugin.saveSettings();
+            })
+        );
+
+      new Setting(containerEl)
+        .setName("Claude model")
+        .setDesc("Claude model to use. Must be available on your Claude plan.")
+        .addText((text) =>
+          text
+            .setPlaceholder("claude-sonnet-4-5")
+            .setValue(this.plugin.settings.claudeModel)
+            .onChange(async (value) => {
+              this.plugin.settings.claudeModel = value.trim() || DEFAULT_SETTINGS.claudeModel;
+              await this.plugin.saveSettings();
+            })
+        );
+    }
+
+    new Setting(containerEl)
       .setName("Auto translate selection")
       .setDesc("Show a translation popup shortly after text is selected.")
       .addToggle((toggle) =>
@@ -969,31 +1408,33 @@ class CodexTranslatorSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName("Codex command")
-      .setDesc("Leave empty to auto-detect Codex.app or the local Codex CLI.")
-      .addText((text) =>
-        text
-          .setPlaceholder("/Applications/Codex.app/Contents/Resources/codex")
-          .setValue(this.plugin.settings.codexCommand)
-          .onChange(async (value) => {
-            this.plugin.settings.codexCommand = value.trim();
-            await this.plugin.saveSettings();
-          })
-      );
+    if (this.plugin.settings.aiBackend === "codex") {
+      new Setting(containerEl)
+        .setName("Codex command")
+        .setDesc("Leave empty to auto-detect Codex.app or the local Codex CLI.")
+        .addText((text) =>
+          text
+            .setPlaceholder("/Applications/Codex.app/Contents/Resources/codex")
+            .setValue(this.plugin.settings.codexCommand)
+            .onChange(async (value) => {
+              this.plugin.settings.codexCommand = value.trim();
+              await this.plugin.saveSettings();
+            })
+        );
 
-    new Setting(containerEl)
-      .setName("Model")
-      .setDesc("For ChatGPT login, gpt-5.4-mini is a good default.")
-      .addText((text) =>
-        text
-          .setPlaceholder("gpt-5.4-mini")
-          .setValue(this.plugin.settings.model)
-          .onChange(async (value) => {
-            this.plugin.settings.model = value.trim() || DEFAULT_SETTINGS.model;
-            await this.plugin.saveSettings();
-          })
-      );
+      new Setting(containerEl)
+        .setName("Codex model")
+        .setDesc("For ChatGPT login, gpt-5.4-mini is a good default.")
+        .addText((text) =>
+          text
+            .setPlaceholder("gpt-5.4-mini")
+            .setValue(this.plugin.settings.model)
+            .onChange(async (value) => {
+              this.plugin.settings.model = value.trim() || DEFAULT_SETTINGS.model;
+              await this.plugin.saveSettings();
+            })
+        );
+    }
 
     new Setting(containerEl)
       .setName("Custom prompt / context")
@@ -1109,26 +1550,28 @@ class CodexTranslatorSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName("Reasoning effort")
-      .setDesc("Use none for translation unless you need heavier reasoning.")
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption("none", "none")
-          .addOption("low", "low")
-          .addOption("medium", "medium")
-          .addOption("high", "high")
-          .addOption("xhigh", "xhigh")
-          .setValue(this.plugin.settings.reasoningEffort)
-          .onChange(async (value) => {
-            this.plugin.settings.reasoningEffort = value as ReasoningEffort;
-            await this.plugin.saveSettings();
-          })
-      );
+    if (this.plugin.settings.aiBackend === "codex") {
+      new Setting(containerEl)
+        .setName("Reasoning effort")
+        .setDesc("Use none for translation unless you need heavier reasoning.")
+        .addDropdown((dropdown) =>
+          dropdown
+            .addOption("none", "none")
+            .addOption("low", "low")
+            .addOption("medium", "medium")
+            .addOption("high", "high")
+            .addOption("xhigh", "xhigh")
+            .setValue(this.plugin.settings.reasoningEffort)
+            .onChange(async (value) => {
+              this.plugin.settings.reasoningEffort = value as ReasoningEffort;
+              await this.plugin.saveSettings();
+            })
+        );
+    }
 
     new Setting(containerEl)
       .setName("Timeout")
-      .setDesc("Maximum seconds to wait for Codex.")
+      .setDesc("Maximum seconds to wait for the AI.")
       .addText((text) =>
         text
           .setPlaceholder("90")
@@ -1138,6 +1581,38 @@ class CodexTranslatorSettingTab extends PluginSettingTab {
             this.plugin.settings.timeoutSeconds = Number.isFinite(parsed)
               ? Math.max(10, parsed)
               : DEFAULT_SETTINGS.timeoutSeconds;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Single-shot translation limit (characters)")
+      .setDesc("Documents under this length are sent to the AI in one request for better quality. Longer documents fall back to batch mode.")
+      .addText((text) =>
+        text
+          .setPlaceholder("12000")
+          .setValue(String(this.plugin.settings.singleShotMaxChars))
+          .onChange(async (value) => {
+            const parsed = Number.parseInt(value, 10);
+            this.plugin.settings.singleShotMaxChars = Number.isFinite(parsed) && parsed > 0
+              ? parsed
+              : DEFAULT_SETTINGS.singleShotMaxChars;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Batch chunk size (characters)")
+      .setDesc("When falling back to batch mode, how many characters per chunk.")
+      .addText((text) =>
+        text
+          .setPlaceholder("4000")
+          .setValue(String(this.plugin.settings.batchChunkChars))
+          .onChange(async (value) => {
+            const parsed = Number.parseInt(value, 10);
+            this.plugin.settings.batchChunkChars = Number.isFinite(parsed) && parsed >= 500
+              ? parsed
+              : DEFAULT_SETTINGS.batchChunkChars;
             await this.plugin.saveSettings();
           })
       );
@@ -1232,55 +1707,54 @@ function escapeRegExp(value: string): string {
   return value.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
 }
 
+const BLOCK_SEP = "§§§BLOCK§§§";
+
 function buildBlockTranslationPrompt(blockTexts: string[], customPrompt: string): string {
+  const numberedBlocks = blockTexts
+    .map((text, i) => `[${i + 1}]\n${text}`)
+    .join(`\n${BLOCK_SEP}\n`);
+
   return [
     "You are a precise Markdown translation engine.",
-    "Translate every string in the `blocks` array to Simplified Chinese.",
+    "Translate each numbered block below to Simplified Chinese.",
     customPrompt.trim()
       ? `User custom context and preferences:\n${customPrompt.trim()}`
       : "User custom context and preferences: none.",
     "",
     "Rules:",
-    "- Return only a valid JSON array of strings.",
-    "- The returned array must have exactly the same length and order as `blocks`.",
-    "- Do not merge, split, remove, or reorder blocks.",
-    "- Preserve Markdown structure, headings, lists, tables, links, inline code, and code fences inside each block.",
-    "- Do not translate code, commands, file paths, URLs, package names, identifiers, or placeholders.",
-    "- Do not add explanations, labels, Markdown fences, or surrounding prose.",
+    `- Output ONLY the translations, separated by the delimiter line: ${BLOCK_SEP}`,
+    "- Preserve the exact count and order of blocks.",
+    "- Do not output the block numbers.",
+    "- Preserve Markdown structure, headings, lists, tables, links, inline code, and code fences.",
+    "- Do not translate code, commands, file paths, URLs, package names, or identifiers.",
+    "- Do not add explanations, labels, or surrounding prose.",
     "",
-    "JSON payload:",
-    JSON.stringify({ blocks: blockTexts })
+    "Blocks:",
+    numberedBlocks
   ].join("\n");
 }
 
 function parseTranslationArray(rawResult: string, expectedLength: number): string[] {
-  let candidate = rawResult.trim();
-  const fenced = candidate.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const parts = rawResult
+    .split(BLOCK_SEP)
+    .map((s) => s.replace(/^\s*\[\d+\]\s*/m, "").trim());
 
-  if (fenced) {
-    candidate = fenced[1].trim();
+  if (parts.length === expectedLength) {
+    return parts;
   }
 
-  const firstBracket = candidate.indexOf("[");
-  const lastBracket = candidate.lastIndexOf("]");
+  // Fallback: try to strip any leading/trailing fluff and re-split
+  const trimmed = rawResult.trim().replace(/^.*?(?=§§§BLOCK§§§|\[1\])/s, "");
+  const parts2 = trimmed
+    .split(BLOCK_SEP)
+    .map((s) => s.replace(/^\s*\[\d+\]\s*/m, "").trim())
+    .filter((s) => s.length > 0);
 
-  if (firstBracket < 0 || lastBracket < firstBracket) {
-    throw new Error("Codex did not return a JSON array.");
+  if (parts2.length === expectedLength) {
+    return parts2;
   }
 
-  const parsed = JSON.parse(candidate.slice(firstBracket, lastBracket + 1)) as unknown;
-
-  if (!Array.isArray(parsed) || parsed.length !== expectedLength) {
-    throw new Error("Codex returned a JSON array with the wrong length.");
-  }
-
-  return parsed.map((item) => {
-    if (typeof item !== "string") {
-      throw new Error("Codex returned a non-string translation item.");
-    }
-
-    return item.trim();
-  });
+  throw new Error(`Expected ${expectedLength} blocks but got ${parts.length}.`);
 }
 
 function appendDocumentTranslation(sourceText: string, translatedText: string): string {
@@ -1413,41 +1887,78 @@ function resolveCodexCommand(configuredCommand: string): string {
   return CODEX_CANDIDATES.find((candidate) => candidate === "codex" || existsSync(candidate)) ?? "codex";
 }
 
+function resolveClaudeCommand(configuredCommand: string): string {
+  if (configuredCommand) {
+    return configuredCommand;
+  }
+
+  return CLAUDE_CANDIDATES.find((candidate) => candidate === "claude" || existsSync(candidate)) ?? "claude";
+}
+
 interface ProcessResult {
   code: number | null;
   stdout: string;
   stderr: string;
 }
 
-function runProcess(
+interface ProcessHandle {
+  kill: () => void;
+  promise: Promise<ProcessResult>;
+}
+
+function spawnProcess(
   command: string,
   args: string[],
   stdin: string,
-  timeoutMs: number
-): Promise<ProcessResult> {
-  return new Promise((resolve, reject) => {
+  timeoutMs: number,
+  onProgress?: (line: string) => void
+): ProcessHandle {
+  let killFn: () => void = () => {};
+
+  const promise = new Promise<ProcessResult>((resolve, reject) => {
     const child = spawn(command, args, {
       env: buildCodexEnv(),
       shell: false,
       windowsHide: true
     });
 
+    killFn = () => {
+      child.kill("SIGTERM");
+      window.setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* already dead */ } }, 1000);
+    };
+
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let killed = false;
+    let lastProgressLine = "";
+
+    const fireProgress = (chunk: string) => {
+      if (!onProgress) return;
+      const lines = chunk.split(/\r?\n/);
+      for (const line of lines) {
+        const trimmed = line.replace(/\x1b\[[0-9;]*m/g, "").trim();
+        if (trimmed && trimmed !== lastProgressLine) {
+          lastProgressLine = trimmed;
+          onProgress(trimmed);
+        }
+      }
+    };
 
     const timeout = window.setTimeout(() => {
       timedOut = true;
-      child.kill();
+      child.kill("SIGTERM");
     }, timeoutMs);
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
+      fireProgress(chunk);
     });
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
+      fireProgress(chunk);
     });
 
     child.on("error", (error) => {
@@ -1455,11 +1966,16 @@ function runProcess(
       reject(error);
     });
 
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       window.clearTimeout(timeout);
 
       if (timedOut) {
-        reject(new Error(`Codex timed out after ${Math.round(timeoutMs / 1000)} seconds.`));
+        reject(new Error(`Process timed out after ${Math.round(timeoutMs / 1000)} seconds.`));
+        return;
+      }
+
+      if (signal === "SIGTERM" || signal === "SIGKILL" || killed) {
+        reject(new Error("Translation stopped."));
         return;
       }
 
@@ -1467,7 +1983,13 @@ function runProcess(
     });
 
     child.stdin.end(stdin);
+
+    // track kill calls so close handler knows it was intentional
+    const origKill = killFn;
+    killFn = () => { killed = true; origKill(); };
   });
+
+  return { promise, kill: () => killFn() };
 }
 
 function buildCodexEnv(): NodeJS.ProcessEnv {
@@ -1734,4 +2256,12 @@ function getRangeRect(range: Range): DOMRect | null {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+async function googleTranslate(text: string, targetLang = "zh-CN"): Promise<string> {
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Google Translate HTTP ${response.status}`);
+  const data = await response.json() as unknown[][][];
+  return (data[0] ?? []).map((item) => (item[0] as string) ?? "").join("");
 }
