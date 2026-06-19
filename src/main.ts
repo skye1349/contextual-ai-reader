@@ -951,7 +951,15 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
       return "codex";
     }
 
-    return hasClaudeCommand(this.settings.claudeCommand) ? "claude" : "codex";
+    if (hasCodexCommand(this.settings.codexCommand)) {
+      return "codex";
+    }
+
+    if (hasClaudeCommand(this.settings.claudeCommand)) {
+      return "claude";
+    }
+
+    return "codex";
   }
 
   private getBackendLabel(): string {
@@ -1374,10 +1382,10 @@ class CodexTranslatorSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("AI backend")
-      .setDesc("Auto uses Claude Code when available, then falls back to Codex. Both run locally with no API key.")
+      .setDesc("Auto uses Codex when available, then falls back to Claude Code. Both run locally with no API key.")
       .addDropdown((dropdown) =>
         dropdown
-          .addOption("auto", "Auto (Claude if available)")
+          .addOption("auto", "Auto (Codex if available)")
           .addOption("codex", "Codex (ChatGPT plan)")
           .addOption("claude", "Claude Code (Claude plan)")
           .setValue(this.plugin.settings.aiBackend)
@@ -1917,6 +1925,14 @@ function resolveCodexCommand(configuredCommand: string): string {
   }
 
   return CODEX_CANDIDATES.find((candidate) => candidate === "codex" || existsSync(candidate)) ?? "codex";
+}
+
+function hasCodexCommand(configuredCommand: string): boolean {
+  if (configuredCommand) {
+    return existsSync(configuredCommand) || configuredCommand === "codex";
+  }
+
+  return CODEX_CANDIDATES.some((candidate) => candidate !== "codex" && existsSync(candidate));
 }
 
 function resolveClaudeCommand(configuredCommand: string): string {

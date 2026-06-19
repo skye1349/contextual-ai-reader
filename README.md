@@ -88,7 +88,7 @@ Supported scope types:
 
 - `Auto translate selection`: show a popup after text is selected.
 - `Require Command key for auto translate`: only show the popup when `Command` is held during selection. Enabled by default.
-- `AI backend`: `Auto`, `Codex`, or `Claude Code`. Auto uses Claude Code when available, then falls back to Codex.
+- `AI backend`: `Auto`, `Codex`, or `Claude Code`. Auto uses Codex when available, then falls back to Claude Code.
 - `Custom prompt / context`: add book, topic, terminology, style, or translation preferences.
 - `Excerpt file`: vault path for saved passages.
 - `Open excerpt file after saving`: open the excerpt note in a right-side split.
