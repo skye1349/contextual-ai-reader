@@ -1,5 +1,7 @@
 .contextual-ai-reader-popover {
   position: absolute;
+  top: var(--ai-reader-popover-top, 0);
+  left: var(--ai-reader-popover-left, 0);
   z-index: 1000;
   box-sizing: border-box;
   width: min(560px, calc(100vw - 24px));
@@ -15,6 +17,10 @@
   line-height: 1.55;
   white-space: pre-wrap;
   overscroll-behavior: contain;
+}
+
+.contextual-ai-reader-popover.is-hidden {
+  display: none;
 }
 
 .contextual-ai-reader-popover.is-loading {

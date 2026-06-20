@@ -99,6 +99,8 @@ const CODEX_PATH_ENTRIES = [
   "/sbin"
 ];
 
+const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+
 function buildClaudeCandidates(): string[] {
   const home = process.env.HOME || homedir();
   const candidates: string[] = [
@@ -316,7 +318,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addSettingTab(new ContextualAIReaderSettingTab(this.app, this));
 
-    this.registerDomEvent(document, "selectionchange", () => {
+    this.registerDomEvent(activeDocument, "selectionchange", () => {
       this.handleSelectionChange();
     });
     this.registerDomEvent(window, "keydown", (event) => {
@@ -334,12 +336,12 @@ export default class ContextualAIReaderPlugin extends Plugin {
       this.isCommandKeyPressed = false;
       this.commandSelectionGestureUntil = 0;
     });
-    this.registerDomEvent(document, "mousedown", (event) => {
+    this.registerDomEvent(activeDocument, "mousedown", (event) => {
       if (event.metaKey) {
         this.commandSelectionGestureUntil = Date.now() + 2_000;
       }
     }, true);
-    this.registerDomEvent(document, "mouseup", (event) => {
+    this.registerDomEvent(activeDocument, "mouseup", (event) => {
       if (event.metaKey) {
         this.commandSelectionGestureUntil = Date.now() + 700;
       }
@@ -1071,7 +1073,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
       throw: false
     });
 
-    const data = response.json as OpenAIChatCompletionResult | undefined;
+    const data = parseOpenAIChatCompletionResult(response.json);
     if (response.status < 200 || response.status >= 300) {
       throw new Error(data?.error?.message || `OpenAI API HTTP ${response.status}`);
     }
@@ -1119,7 +1121,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
       throw: false
     });
 
-    const data = response.json as AnthropicMessageResult | undefined;
+    const data = parseAnthropicMessageResult(response.json);
     if (response.status < 200 || response.status >= 300) {
       throw new Error(data?.error?.message || `Anthropic API HTTP ${response.status}`);
     }
@@ -1456,7 +1458,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
     this.translationCache.set(sourceText, translation);
 
     if (this.translationCache.size > 30) {
-      const oldestKey = this.translationCache.keys().next().value;
+      const oldestKey = this.translationCache.keys().next().value as string | undefined;
       if (oldestKey) {
         this.translationCache.delete(oldestKey);
       }
@@ -1469,34 +1471,34 @@ export default class ContextualAIReaderPlugin extends Plugin {
     popup.classList.remove("is-error");
     popup.classList.add("is-loading");
 
-    const statusRow = document.createElement("div");
+    const statusRow = activeDocument.createElement("div");
     statusRow.className = "ai-reader-status-row";
 
-    const spinner = document.createElement("span");
+    const spinner = activeDocument.createElement("span");
     spinner.className = "ai-reader-spin";
     spinner.setText("⟳");
     statusRow.appendChild(spinner);
 
-    const label = document.createElement("span");
+    const label = activeDocument.createElement("span");
     label.className = "ai-reader-status-label";
     label.setText(`${backendLabel} · 0s`);
     statusRow.appendChild(label);
 
-    const stopBtn = document.createElement("button");
+    const stopBtn = activeDocument.createElement("button");
     stopBtn.type = "button";
     stopBtn.className = "contextual-ai-reader-stop-btn";
     stopBtn.setText("■ Stop");
-    stopBtn.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); });
-    stopBtn.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); onStop(); });
+    stopBtn.addEventListener("mousedown", (event: MouseEvent) => { event.preventDefault(); event.stopPropagation(); });
+    stopBtn.addEventListener("click", (event: MouseEvent) => { event.preventDefault(); event.stopPropagation(); onStop(); });
     statusRow.appendChild(stopBtn);
 
     popup.appendChild(statusRow);
 
-    const streamBody = document.createElement("div");
+    const streamBody = activeDocument.createElement("div");
     streamBody.className = "ai-reader-stream-body";
     popup.appendChild(streamBody);
 
-    popup.style.display = "block";
+    popup.removeClass("is-hidden");
     this.positionPopup(rect);
   }
 
@@ -1551,7 +1553,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
     popup.classList.toggle("is-loading", card.status === "loading");
     popup.classList.toggle("is-error", card.status === "error");
 
-    const body = document.createElement("div");
+    const body = activeDocument.createElement("div");
     body.className = "contextual-ai-reader-vocab";
 
     const wordEl = body.createDiv("contextual-ai-reader-vocab-word");
@@ -1584,7 +1586,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     popup.appendChild(body);
 
-    const actions = document.createElement("div");
+    const actions = activeDocument.createElement("div");
     actions.className = "contextual-ai-reader-actions";
 
     actions.appendChild(this.createIconButton("volume-2", "Read selected word", () => {
@@ -1615,7 +1617,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
     }));
 
     popup.appendChild(actions);
-    popup.style.display = "block";
+    popup.removeClass("is-hidden");
     this.positionPopup(rect);
   }
 
@@ -1631,19 +1633,19 @@ export default class ContextualAIReaderPlugin extends Plugin {
     popup.classList.toggle("is-loading", state === "loading");
     popup.classList.toggle("is-error", state === "error");
 
-    const body = document.createElement("div");
+    const body = activeDocument.createElement("div");
     body.className = "contextual-ai-reader-body";
     body.setText(text);
     popup.appendChild(body);
 
     if (tokenUsage && hasTokenUsage(tokenUsage)) {
-      const usageEl = document.createElement("div");
+      const usageEl = activeDocument.createElement("div");
       usageEl.className = "contextual-ai-reader-usage";
       usageEl.setText(`Token usage: ${formatTokenUsage(tokenUsage)}`);
       popup.appendChild(usageEl);
     }
 
-    const actions = document.createElement("div");
+    const actions = activeDocument.createElement("div");
     actions.className = "contextual-ai-reader-actions";
 
     actions.appendChild(this.createIconButton("volume-2", "Read original English", () => {
@@ -1662,22 +1664,22 @@ export default class ContextualAIReaderPlugin extends Plugin {
     }
 
     popup.appendChild(actions);
-    popup.style.display = "block";
+    popup.removeClass("is-hidden");
     this.positionPopup(rect);
   }
 
   private createIconButton(icon: string, label: string, onClick: () => void): HTMLButtonElement {
-    const button = document.createElement("button");
+    const button = activeDocument.createElement("button");
     button.type = "button";
     button.className = "contextual-ai-reader-button";
     button.ariaLabel = label;
     button.title = label;
     setIcon(button, icon);
-    button.addEventListener("mousedown", (event) => {
+    button.addEventListener("mousedown", (event: MouseEvent) => {
       event.preventDefault();
       event.stopPropagation();
     });
-    button.addEventListener("click", (event) => {
+    button.addEventListener("click", (event: MouseEvent) => {
       event.preventDefault();
       event.stopPropagation();
       onClick();
@@ -1691,12 +1693,12 @@ export default class ContextualAIReaderPlugin extends Plugin {
       return this.popupEl;
     }
 
-    const popup = document.createElement("div");
+    const popup = activeDocument.createElement("div");
     popup.className = "contextual-ai-reader-popover";
-    popup.style.display = "none";
-    popup.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
-    popup.addEventListener("touchmove", (event) => event.stopPropagation(), { passive: true });
-    document.body.appendChild(popup);
+    popup.addClass("is-hidden");
+    popup.addEventListener("wheel", (event: WheelEvent) => event.stopPropagation(), { passive: true });
+    popup.addEventListener("touchmove", (event: TouchEvent) => event.stopPropagation(), { passive: true });
+    activeDocument.body.appendChild(popup);
     this.popupEl = popup;
 
     return popup;
@@ -1719,8 +1721,10 @@ export default class ContextualAIReaderPlugin extends Plugin {
     const left = clamp(window.scrollX + rect.left, minLeft, Math.max(minLeft, maxLeft));
     const top = belowTop + popupBox.height > bottomLimit ? Math.max(window.scrollY + margin, aboveTop) : belowTop;
 
-    this.popupEl.style.left = `${left}px`;
-    this.popupEl.style.top = `${top}px`;
+    this.popupEl.setCssProps({
+      "--ai-reader-popover-left": `${left}px`,
+      "--ai-reader-popover-top": `${top}px`
+    });
   }
 
   private hidePopup() {
@@ -1728,7 +1732,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
       return;
     }
 
-    this.popupEl.style.display = "none";
+    this.popupEl.addClass("is-hidden");
   }
 
   private setStatus(text: string) {
@@ -1837,12 +1841,12 @@ class BatchScopeModal extends Modal {
       : "Batch translate: interleave Chinese paragraphs");
     this.contentEl.empty();
 
-    const description = document.createElement("p");
+    const description = activeDocument.createElement("p");
     description.className = "contextual-ai-reader-batch-description";
     description.setText("Enter one Markdown file, folder, or wildcard per line. This command writes directly to the matched files.");
     this.contentEl.appendChild(description);
 
-    const textarea = document.createElement("textarea");
+    const textarea = activeDocument.createElement("textarea");
     textarea.className = "contextual-ai-reader-batch-input";
     textarea.placeholder = [
       "Books/Example Book/",
@@ -1852,17 +1856,17 @@ class BatchScopeModal extends Modal {
     ].join("\n");
     this.contentEl.appendChild(textarea);
 
-    const actions = document.createElement("div");
+    const actions = activeDocument.createElement("div");
     actions.className = "contextual-ai-reader-batch-actions";
 
-    const cancelButton = document.createElement("button");
+    const cancelButton = activeDocument.createElement("button");
     cancelButton.type = "button";
     cancelButton.setText("Cancel");
     cancelButton.addEventListener("click", () => {
       this.close();
     });
 
-    const startButton = document.createElement("button");
+    const startButton = activeDocument.createElement("button");
     startButton.type = "button";
     startButton.className = "mod-cta";
     startButton.setText("Start");
@@ -2315,7 +2319,7 @@ function buildVocabularyPrompt(
 function getSingleEnglishWord(text: string): string | null {
   const cleaned = text
     .trim()
-    .replace(/^[“"'\(\[\{]+|[”"'\)\]\}.,;:!?]+$/g, "");
+    .replace(/^[“"'([{]+|[”"')\]}.,;:!?]+$/g, "");
 
   if (!/^[A-Za-z][A-Za-z'-]{1,39}$/.test(cleaned)) {
     return null;
@@ -2864,6 +2868,18 @@ function hasClaudeCommand(configuredCommand: string): boolean {
   return CLAUDE_CANDIDATES.some((candidate) => candidate !== "claude" && existsSync(candidate));
 }
 
+function parseOpenAIChatCompletionResult(value: unknown): OpenAIChatCompletionResult | undefined {
+  return typeof value === "object" && value !== null
+    ? value as OpenAIChatCompletionResult
+    : undefined;
+}
+
+function parseAnthropicMessageResult(value: unknown): AnthropicMessageResult | undefined {
+  return typeof value === "object" && value !== null
+    ? value as AnthropicMessageResult
+    : undefined;
+}
+
 function normalizeApiBaseUrl(value: string, fallback: string): string {
   return (value.trim() || fallback).replace(/\/+$/, "");
 }
@@ -2927,7 +2943,7 @@ function spawnProcess(
       if (!onProgress) return;
       const lines = chunk.split(/\r?\n/);
       for (const line of lines) {
-        const trimmed = line.replace(/\x1b\[[0-9;]*m/g, "").trim();
+        const trimmed = line.replace(ANSI_ESCAPE_PATTERN, "").trim();
         if (trimmed && trimmed !== lastProgressLine) {
           lastProgressLine = trimmed;
           onProgress(trimmed);
@@ -3180,7 +3196,7 @@ function cleanSpeechText(text: string): string {
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/`([^`]+)`/g, "$1")
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/[#>*_~\-]+/g, " ")
+    .replace(/[#>*_~-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -3342,7 +3358,7 @@ function getSelectionElement(node: Node | null): Element | null {
     return null;
   }
 
-  return node instanceof Element ? node : node.parentElement;
+  return node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
 }
 
 function getRangeRect(range: Range): DOMRect | null {
@@ -3362,8 +3378,18 @@ function clamp(value: number, min: number, max: number): number {
 
 async function googleTranslate(text: string, targetLang = "zh-CN"): Promise<string> {
   const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`;
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Google Translate HTTP ${response.status}`);
-  const data = await response.json() as unknown[][][];
-  return (data[0] ?? []).map((item) => (item[0] as string) ?? "").join("");
+  const response = await requestUrl({ url, throw: false });
+  if (response.status < 200 || response.status >= 300) throw new Error(`Google Translate HTTP ${response.status}`);
+  const data = parseGoogleTranslateResponse(response.json);
+  return data.map((item) => item[0] ?? "").join("");
+}
+
+function parseGoogleTranslateResponse(value: unknown): string[][] {
+  if (!Array.isArray(value) || !Array.isArray(value[0])) {
+    return [];
+  }
+
+  return value[0]
+    .filter((item): item is unknown[] => Array.isArray(item))
+    .map((item) => item.map((part) => typeof part === "string" ? part : ""));
 }

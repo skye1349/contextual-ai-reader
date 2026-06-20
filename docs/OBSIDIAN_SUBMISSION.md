@@ -20,8 +20,8 @@ Official guide: https://docs.obsidian.md/Plugins/Releasing/Submit+your+plugin
 2. Push this repository to GitHub.
 3. Run `npm run build`.
 4. Commit the generated `main.js`.
-5. Create a GitHub release with a tag matching `manifest.json`, for example `1.0.1`.
-6. Upload `main.js`, `manifest.json`, and `styles.css` as release assets.
+5. Push a Git tag matching `manifest.json`, for example `1.0.2`.
+6. Let the repository release workflow create the GitHub release, upload `main.js`, `manifest.json`, and `styles.css`, and generate artifact attestations.
 7. Go to https://community.obsidian.md and sign in with an Obsidian account.
 8. Link the GitHub account that owns the repository.
 9. Open **Plugins** in the sidebar and choose **New plugin**.
@@ -35,6 +35,7 @@ Official guide: https://docs.obsidian.md/Plugins/Releasing/Submit+your+plugin
 - Local Codex and Claude Code modes use local account sessions and do not require API keys.
 - OpenAI and Anthropic API modes require API keys, which are stored in local plugin settings.
 - Full-note and batch commands write directly to Markdown files, so the README should keep a backup warning.
+- Release assets must be published by `.github/workflows/release.yml` so GitHub artifact attestations are generated.
 
 ## Community Plugin Entry
 
