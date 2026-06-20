@@ -3102,8 +3102,10 @@ async function fetchYouTubeTranscript(videoId: string): Promise<YouTubeTranscrip
     throw new Error("Subtitle track has no downloadable URL.");
   }
 
+  const subtitleText = await fetchTextWithNode(withYouTubeCaptionFormat(baseUrl, "json3"));
+
   return {
-    entries: parseYouTubeTranscriptXml(await fetchTextWithNode(baseUrl)),
+    entries: parseYouTubeTranscript(subtitleText),
     title,
     videoId
   };
@@ -3204,12 +3206,56 @@ function chooseCaptionTrack(tracks: any[]): any {
     ?? tracks[0];
 }
 
+function withYouTubeCaptionFormat(baseUrl: string, format: string): string {
+  const url = new URL(baseUrl);
+  url.searchParams.set("fmt", format);
+  return url.toString();
+}
+
+function parseYouTubeTranscript(rawText: string): YouTubeTranscriptEntry[] {
+  const trimmed = rawText.trim();
+
+  if (trimmed.startsWith("{")) {
+    const jsonEntries = parseYouTubeTranscriptJson(trimmed);
+    if (jsonEntries.length > 0) {
+      return jsonEntries;
+    }
+  }
+
+  if (trimmed.startsWith("<")) {
+    const xmlEntries = parseYouTubeTranscriptXml(trimmed);
+    if (xmlEntries.length > 0) {
+      return xmlEntries;
+    }
+  }
+
+  throw new Error("Could not parse YouTube subtitle data.");
+}
+
+function parseYouTubeTranscriptJson(jsonText: string): YouTubeTranscriptEntry[] {
+  const data = JSON.parse(jsonText) as {
+    events?: Array<{
+      dDurationMs?: number;
+      segs?: Array<{ utf8?: string }>;
+      tStartMs?: number;
+    }>;
+  };
+
+  return (data.events ?? [])
+    .map((event) => ({
+      duration: (event.dDurationMs ?? 0) / 1000,
+      start: (event.tStartMs ?? 0) / 1000,
+      text: normalizeWhitespace((event.segs ?? []).map((seg) => seg.utf8 ?? "").join(""))
+    }))
+    .filter((entry) => entry.text);
+}
+
 function parseYouTubeTranscriptXml(xml: string): YouTubeTranscriptEntry[] {
   const doc = new DOMParser().parseFromString(xml, "text/xml");
   const parseError = doc.querySelector("parsererror");
 
   if (parseError) {
-    throw new Error("Could not parse subtitle XML.");
+    return [];
   }
 
   return Array.from(doc.querySelectorAll("text"))
