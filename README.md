@@ -1,5 +1,7 @@
 # Contextual AI Reader
 
+[中文文档](README.zh-CN.md)
+
 Contextual AI Reader is a desktop reading companion for English material with AI-assisted Chinese translation, vocabulary explanation, text-to-speech, excerpts, and Markdown file translation.
 
 It can use local AI assistant CLIs such as Codex and Claude Code, or direct API-token backends such as OpenAI and Anthropic.
