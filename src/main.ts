@@ -28,6 +28,7 @@ type FullDocumentInsertMode = "append" | "interleave";
 type AIBackend = "auto" | "codex" | "claude";
 
 const YOUTUBE_PLAYER_VIEW_TYPE = "contextual-ai-reader-youtube-player";
+const YOUTUBE_INTERNAL_LINK_HASH = "contextual-ai-reader-youtube";
 const INNERTUBE_API_KEY = ["AI", "za", "Sy", "AO", "_FJ2SlqU8Q4STEHLGCi", "lw_Y9_11qcW8"].join("");
 const INNERTUBE_PLAYER_URL = `https://www.youtube.com/youtubei/v1/player?key=${INNERTUBE_API_KEY}`;
 const INNERTUBE_IOS_USER_AGENT = "com.google.ios.youtube/20.10.38 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)";
@@ -319,7 +320,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addSettingTab(new ContextualAIReaderSettingTab(this.app, this));
 
-    this.registerDomEvent(document, "click", (event) => {
+    const handleYouTubeTimestampEvent = (event: MouseEvent) => {
       const link = getClosestAnchor(event.target);
       const target = parseYouTubeInternalLink(link?.getAttribute("href") ?? "");
       if (!target) return;
@@ -328,10 +329,21 @@ export default class ContextualAIReaderPlugin extends Plugin {
       event.stopPropagation();
       event.stopImmediatePropagation();
       void this.openYouTubeVideo(target.videoId, target.start);
-    }, true);
+    };
+
+    this.registerDomEvent(document, "mousedown", handleYouTubeTimestampEvent, true);
+    this.registerDomEvent(document, "click", handleYouTubeTimestampEvent, true);
+    this.registerDomEvent(document, "auxclick", handleYouTubeTimestampEvent, true);
 
     this.registerMarkdownPostProcessor((element) => {
-      element.querySelectorAll<HTMLAnchorElement>('a[href^="codex-youtube://"]').forEach((link) => {
+      element.querySelectorAll<HTMLAnchorElement>('a[href^="codex-youtube://"], a[href*="#contextual-ai-reader-youtube"]').forEach((link) => {
+        const target = parseYouTubeInternalLink(link.getAttribute("href") ?? "");
+        if (target) {
+          link.href = buildYouTubeInternalSeekLink(target.videoId, target.start);
+          link.removeAttribute("target");
+          link.addClass("contextual-ai-reader-youtube-timestamp");
+        }
+
         link.addEventListener("click", (event) => {
           const target = parseYouTubeInternalLink(link.getAttribute("href") ?? "");
           if (!target) return;
@@ -1859,15 +1871,27 @@ class YouTubePlayerView extends ItemView {
   }
 
   setVideo(videoId: string, start: number) {
+    const normalizedStart = Math.max(0, Math.floor(start));
+    if (this.videoId === videoId && this.iframe?.src) {
+      this.start = normalizedStart;
+      this.updateTitle();
+      this.seekIframe(normalizedStart);
+      return;
+    }
+
     this.videoId = videoId;
-    this.start = Math.max(0, Math.floor(start));
+    this.start = normalizedStart;
     this.refreshIframe();
   }
 
-  private refreshIframe() {
+  private updateTitle() {
     if (this.titleEl) {
       this.titleEl.setText(`YouTube · ${this.videoId} · ${formatTimestamp(this.start)}`);
     }
+  }
+
+  private refreshIframe() {
+    this.updateTitle();
 
     if (!this.iframe || !this.videoId) return;
 
@@ -1886,6 +1910,25 @@ class YouTubePlayerView extends ItemView {
         this.iframe.src = nextSrc;
       }
     }, 0);
+  }
+
+  private seekIframe(start: number) {
+    const win = this.iframe?.contentWindow;
+    if (!win) {
+      this.refreshIframe();
+      return;
+    }
+
+    win.postMessage(JSON.stringify({
+      event: "command",
+      func: "seekTo",
+      args: [start, true]
+    }), "https://www.youtube.com");
+    win.postMessage(JSON.stringify({
+      event: "command",
+      func: "playVideo",
+      args: []
+    }), "https://www.youtube.com");
   }
 }
 
@@ -3532,14 +3575,27 @@ function formatYouTubeTranscriptNote(transcript: YouTubeTranscript): string {
 
   for (const entry of transcript.entries) {
     const timestamp = formatTimestamp(entry.start);
-    const seekUrl = `codex-youtube://seek?v=${encodeURIComponent(transcript.videoId)}&t=${Math.floor(entry.start)}`;
+    const seekUrl = buildYouTubeInternalSeekLink(transcript.videoId, entry.start);
     lines.push(`- [${timestamp}](${seekUrl}) ${entry.text}`);
   }
 
   return `${lines.join("\n")}\n`;
 }
 
+function buildYouTubeInternalSeekLink(videoId: string, start: number): string {
+  const params = new URLSearchParams({
+    v: videoId,
+    t: String(Math.max(0, Math.floor(start)))
+  });
+  return `#${YOUTUBE_INTERNAL_LINK_HASH}?${params.toString()}`;
+}
+
 function parseYouTubeInternalLink(href: string): { start: number; videoId: string } | null {
+  const hashTarget = parseYouTubeHashLink(href);
+  if (hashTarget) {
+    return hashTarget;
+  }
+
   try {
     const url = new URL(href);
     if (url.protocol !== "codex-youtube:") {
@@ -3560,6 +3616,30 @@ function parseYouTubeInternalLink(href: string): { start: number; videoId: strin
   } catch {
     return null;
   }
+}
+
+function parseYouTubeHashLink(href: string): { start: number; videoId: string } | null {
+  const hashIndex = href.indexOf(`#${YOUTUBE_INTERNAL_LINK_HASH}`);
+  if (hashIndex < 0) {
+    return null;
+  }
+
+  const rawHash = href.slice(hashIndex + 1);
+  const queryIndex = rawHash.indexOf("?");
+  if (queryIndex < 0 || rawHash.slice(0, queryIndex) !== YOUTUBE_INTERNAL_LINK_HASH) {
+    return null;
+  }
+
+  const params = new URLSearchParams(rawHash.slice(queryIndex + 1));
+  const videoId = normalizeYouTubeVideoId(params.get("v") ?? "");
+  if (!videoId) {
+    return null;
+  }
+
+  return {
+    start: Number.parseInt(params.get("t") ?? "0", 10) || 0,
+    videoId
+  };
 }
 
 function formatTimestamp(seconds: number): string {
