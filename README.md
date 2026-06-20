@@ -4,7 +4,6 @@ Contextual AI Reader is a desktop reading companion for English material with AI
 
 It can use local AI assistant CLIs such as Codex and Claude Code, or direct API-token backends such as OpenAI and Anthropic.
 
-This is an unofficial community plugin. It is not affiliated with OpenAI, Anthropic, or Obsidian.
 
 ## Features
 
