@@ -27,7 +27,7 @@ type InsertMode = "replace" | "append";
 type FullDocumentInsertMode = "append" | "interleave";
 type AIBackend = "auto" | "codex" | "claude";
 
-const YOUTUBE_PLAYER_VIEW_TYPE = "codex-local-translator-youtube-player";
+const YOUTUBE_PLAYER_VIEW_TYPE = "contextual-ai-reader-youtube-player";
 const INNERTUBE_API_KEY = ["AI", "za", "Sy", "AO", "_FJ2SlqU8Q4STEHLGCi", "lw_Y9_11qcW8"].join("");
 const INNERTUBE_PLAYER_URL = `https://www.youtube.com/youtubei/v1/player?key=${INNERTUBE_API_KEY}`;
 const INNERTUBE_IOS_USER_AGENT = "com.google.ios.youtube/20.10.38 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)";
@@ -40,7 +40,7 @@ const INNERTUBE_IOS_CONTEXT = {
   }
 };
 
-interface CodexTranslatorSettings {
+interface ContextualAIReaderSettings {
   aiBackend: AIBackend;
   autoTranslate: boolean;
   batchChunkChars: number;
@@ -64,7 +64,7 @@ interface CodexTranslatorSettings {
   youtubeTranscriptFolder: string;
 }
 
-const DEFAULT_SETTINGS: CodexTranslatorSettings = {
+const DEFAULT_SETTINGS: ContextualAIReaderSettings = {
   aiBackend: "auto",
   autoTranslate: true,
   batchChunkChars: 10000,
@@ -73,7 +73,7 @@ const DEFAULT_SETTINGS: CodexTranslatorSettings = {
   codexCommand: "",
   customPrompt: "",
   debounceMs: 450,
-  excerptFilePath: "Codex Translator Excerpts.md",
+  excerptFilePath: "Contextual AI Reader Excerpts.md",
   includeTranslationInExcerpt: true,
   minSelectionChars: 2,
   model: "gpt-5.4-mini",
@@ -203,8 +203,8 @@ interface YouTubeInputResult {
   url: string;
 }
 
-export default class CodexLocalTranslatorPlugin extends Plugin {
-  settings: CodexTranslatorSettings = DEFAULT_SETTINGS;
+export default class ContextualAIReaderPlugin extends Plugin {
+  settings: ContextualAIReaderSettings = DEFAULT_SETTINGS;
   private autoTimer?: number;
   private commandSelectionGestureUntil = 0;
   private currentKills = new Set<() => void>();
@@ -317,7 +317,7 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
       }
     });
 
-    this.addSettingTab(new CodexTranslatorSettingTab(this.app, this));
+    this.addSettingTab(new ContextualAIReaderSettingTab(this.app, this));
 
     this.registerDomEvent(document, "click", (event) => {
       const link = getClosestAnchor(event.target);
@@ -618,7 +618,7 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
   private addPopupRefineButton(sourceText: string, rect: DOMRect, requestId: number) {
     const popup = this.popupEl;
     if (!popup) return;
-    const actions = popup.querySelector<HTMLElement>(".codex-local-translator-actions");
+    const actions = popup.querySelector<HTMLElement>(".contextual-ai-reader-actions");
     if (!actions) return;
 
     const refineBtn = this.createIconButton("sparkles", `Refine translation with ${this.getBackendLabel()}`, () => {
@@ -1235,7 +1235,7 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
       throw new Error(`Excerpt path exists but is not a file: ${path}`);
     }
 
-    return await this.app.vault.create(path, "# Codex Translator Excerpts\n\n");
+    return await this.app.vault.create(path, "# Contextual AI Reader Excerpts\n\n");
   }
 
   private async ensureParentFolders(filePath: string) {
@@ -1467,21 +1467,21 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
     popup.classList.add("is-loading");
 
     const statusRow = document.createElement("div");
-    statusRow.className = "codex-translator-status-row";
+    statusRow.className = "ai-reader-status-row";
 
     const spinner = document.createElement("span");
-    spinner.className = "codex-translator-spin";
+    spinner.className = "ai-reader-spin";
     spinner.setText("⟳");
     statusRow.appendChild(spinner);
 
     const label = document.createElement("span");
-    label.className = "codex-translator-status-label";
+    label.className = "ai-reader-status-label";
     label.setText(`${backendLabel} · 0s`);
     statusRow.appendChild(label);
 
     const stopBtn = document.createElement("button");
     stopBtn.type = "button";
-    stopBtn.className = "codex-local-translator-stop-btn";
+    stopBtn.className = "contextual-ai-reader-stop-btn";
     stopBtn.setText("■ Stop");
     stopBtn.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); });
     stopBtn.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); onStop(); });
@@ -1490,7 +1490,7 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
     popup.appendChild(statusRow);
 
     const streamBody = document.createElement("div");
-    streamBody.className = "codex-translator-stream-body";
+    streamBody.className = "ai-reader-stream-body";
     popup.appendChild(streamBody);
 
     popup.style.display = "block";
@@ -1500,7 +1500,7 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
   private updatePopupTimer(secs: number) {
     const popup = this.popupEl;
     if (!popup) return;
-    const label = popup.querySelector<HTMLElement>(".codex-translator-status-label");
+    const label = popup.querySelector<HTMLElement>(".ai-reader-status-label");
     if (label) {
       const text = label.getText();
       const base = text.replace(/ · \d+s$/, "");
@@ -1511,10 +1511,10 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
   private updatePopupTokens(tokens: TokenUsage) {
     const popup = this.popupEl;
     if (!popup) return;
-    let tokensEl = popup.querySelector<HTMLElement>(".codex-translator-popup-tokens");
+    let tokensEl = popup.querySelector<HTMLElement>(".ai-reader-popup-tokens");
     if (!tokensEl) {
-      tokensEl = popup.querySelector<HTMLElement>(".codex-translator-status-row")
-        ?.createSpan({ cls: "codex-translator-popup-tokens" }) ?? null;
+      tokensEl = popup.querySelector<HTMLElement>(".ai-reader-status-row")
+        ?.createSpan({ cls: "ai-reader-popup-tokens" }) ?? null;
     }
     if (tokensEl) {
       tokensEl.setText(formatTokenUsageCompact(tokens));
@@ -1524,14 +1524,14 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
   private updatePopupStreamText(text: string) {
     const popup = this.popupEl;
     if (!popup) return;
-    const body = popup.querySelector<HTMLElement>(".codex-translator-stream-body");
+    const body = popup.querySelector<HTMLElement>(".ai-reader-stream-body");
     if (body) body.setText(text);
   }
 
   private updateVocabularyStatus(text: string) {
     const popup = this.popupEl;
     if (!popup) return;
-    const status = popup.querySelector<HTMLElement>(".codex-local-translator-vocab-status");
+    const status = popup.querySelector<HTMLElement>(".contextual-ai-reader-vocab-status");
     if (status) status.setText(text);
   }
 
@@ -1549,20 +1549,20 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
     popup.classList.toggle("is-error", card.status === "error");
 
     const body = document.createElement("div");
-    body.className = "codex-local-translator-vocab";
+    body.className = "contextual-ai-reader-vocab";
 
-    const wordEl = body.createDiv("codex-local-translator-vocab-word");
+    const wordEl = body.createDiv("contextual-ai-reader-vocab-word");
     wordEl.setText(card.word);
 
-    const localEl = body.createDiv("codex-local-translator-vocab-section");
-    localEl.createDiv("codex-local-translator-vocab-label").setText("基础释义");
-    localEl.createDiv("codex-local-translator-vocab-text").setText(
+    const localEl = body.createDiv("contextual-ai-reader-vocab-section");
+    localEl.createDiv("contextual-ai-reader-vocab-label").setText("基础释义");
+    localEl.createDiv("contextual-ai-reader-vocab-text").setText(
       card.baseDefinition || "本地词典和缓存暂无命中。"
     );
 
-    const contextEl = body.createDiv("codex-local-translator-vocab-section");
-    contextEl.createDiv("codex-local-translator-vocab-label").setText("当前语境");
-    contextEl.createDiv("codex-local-translator-vocab-text").setText(
+    const contextEl = body.createDiv("contextual-ai-reader-vocab-section");
+    contextEl.createDiv("contextual-ai-reader-vocab-label").setText("当前语境");
+    contextEl.createDiv("contextual-ai-reader-vocab-text").setText(
       card.contextExplanation ||
       (card.status === "loading"
         ? `${this.getBackendLabel()} 正在结合当前段落解释…`
@@ -1570,19 +1570,19 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
     );
 
     if (card.status === "loading") {
-      const status = body.createDiv("codex-local-translator-vocab-status");
+      const status = body.createDiv("contextual-ai-reader-vocab-status");
       status.setText(`${this.getBackendLabel()} 正在结合上下文解释…`);
     }
 
     if (card.tokenUsage && hasTokenUsage(card.tokenUsage)) {
-      const usageEl = body.createDiv("codex-local-translator-usage");
+      const usageEl = body.createDiv("contextual-ai-reader-usage");
       usageEl.setText(`Token usage: ${formatTokenUsage(card.tokenUsage)}`);
     }
 
     popup.appendChild(body);
 
     const actions = document.createElement("div");
-    actions.className = "codex-local-translator-actions";
+    actions.className = "contextual-ai-reader-actions";
 
     actions.appendChild(this.createIconButton("volume-2", "Read selected word", () => {
       void this.speakText(sourceText);
@@ -1629,19 +1629,19 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
     popup.classList.toggle("is-error", state === "error");
 
     const body = document.createElement("div");
-    body.className = "codex-local-translator-body";
+    body.className = "contextual-ai-reader-body";
     body.setText(text);
     popup.appendChild(body);
 
     if (tokenUsage && hasTokenUsage(tokenUsage)) {
       const usageEl = document.createElement("div");
-      usageEl.className = "codex-local-translator-usage";
+      usageEl.className = "contextual-ai-reader-usage";
       usageEl.setText(`Token usage: ${formatTokenUsage(tokenUsage)}`);
       popup.appendChild(usageEl);
     }
 
     const actions = document.createElement("div");
-    actions.className = "codex-local-translator-actions";
+    actions.className = "contextual-ai-reader-actions";
 
     actions.appendChild(this.createIconButton("volume-2", "Read original English", () => {
       void this.speakText(sourceText);
@@ -1666,7 +1666,7 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
   private createIconButton(icon: string, label: string, onClick: () => void): HTMLButtonElement {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "codex-local-translator-button";
+    button.className = "contextual-ai-reader-button";
     button.ariaLabel = label;
     button.title = label;
     setIcon(button, icon);
@@ -1689,7 +1689,7 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
     }
 
     const popup = document.createElement("div");
-    popup.className = "codex-local-translator-popover";
+    popup.className = "contextual-ai-reader-popover";
     popup.style.display = "none";
     popup.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
     popup.addEventListener("touchmove", (event) => event.stopPropagation(), { passive: true });
@@ -1753,19 +1753,19 @@ class TranslationProgressOverlay {
     private readonly onStop: () => void
   ) {
     this.backendLabel = backendLabel;
-    this.el = container.createDiv("codex-translator-overlay");
+    this.el = container.createDiv("ai-reader-overlay");
 
-    const header = this.el.createDiv("codex-translator-overlay-header");
+    const header = this.el.createDiv("ai-reader-overlay-header");
 
-    const spinner = header.createSpan("codex-translator-overlay-spinner");
+    const spinner = header.createSpan("ai-reader-overlay-spinner");
     spinner.setText("⟳");
 
-    this.labelEl = header.createSpan({ cls: "codex-translator-overlay-title" });
+    this.labelEl = header.createSpan({ cls: "ai-reader-overlay-title" });
     this.labelEl.setText(`${backendLabel} · 0s`);
 
-    this.tokensEl = header.createSpan({ cls: "codex-translator-overlay-tokens" });
+    this.tokensEl = header.createSpan({ cls: "ai-reader-overlay-tokens" });
 
-    const stopBtn = header.createEl("button", { cls: "codex-translator-overlay-stop" });
+    const stopBtn = header.createEl("button", { cls: "ai-reader-overlay-stop" });
     stopBtn.setText("■ Stop");
     stopBtn.addEventListener("click", () => {
       this.setStatus("Stopping...");
@@ -1773,7 +1773,7 @@ class TranslationProgressOverlay {
       this.onStop();
     });
 
-    this.textEl = this.el.createDiv("codex-translator-overlay-text");
+    this.textEl = this.el.createDiv("ai-reader-overlay-text");
     this.textEl.setText("Waiting for response…");
   }
 
@@ -1905,12 +1905,12 @@ class BatchScopeModal extends Modal {
     this.contentEl.empty();
 
     const description = document.createElement("p");
-    description.className = "codex-local-translator-batch-description";
+    description.className = "contextual-ai-reader-batch-description";
     description.setText("Enter one Markdown file, folder, or wildcard per line. This command writes directly to the matched files.");
     this.contentEl.appendChild(description);
 
     const textarea = document.createElement("textarea");
-    textarea.className = "codex-local-translator-batch-input";
+    textarea.className = "contextual-ai-reader-batch-input";
     textarea.placeholder = [
       "Books/Example Book/",
       "Books/Example Book/08 - Chapter 1.md",
@@ -1920,7 +1920,7 @@ class BatchScopeModal extends Modal {
     this.contentEl.appendChild(textarea);
 
     const actions = document.createElement("div");
-    actions.className = "codex-local-translator-batch-actions";
+    actions.className = "contextual-ai-reader-batch-actions";
 
     const cancelButton = document.createElement("button");
     cancelButton.type = "button";
@@ -1969,7 +1969,7 @@ class YouTubeUrlModal extends Modal {
     this.contentEl.empty();
 
     const description = document.createElement("p");
-    description.className = "codex-local-translator-batch-description";
+    description.className = "contextual-ai-reader-batch-description";
     description.setText("Paste a YouTube URL. The plugin will open the video in an Obsidian tab and can extract public subtitles into a note.");
     this.contentEl.appendChild(description);
 
@@ -1993,7 +1993,7 @@ class YouTubeUrlModal extends Modal {
     }
 
     const actions = document.createElement("div");
-    actions.className = "codex-local-translator-batch-actions";
+    actions.className = "contextual-ai-reader-batch-actions";
 
     const cancelButton = document.createElement("button");
     cancelButton.type = "button";
@@ -2038,10 +2038,10 @@ class YouTubeUrlModal extends Modal {
   }
 }
 
-class CodexTranslatorSettingTab extends PluginSettingTab {
-  plugin: CodexLocalTranslatorPlugin;
+class ContextualAIReaderSettingTab extends PluginSettingTab {
+  plugin: ContextualAIReaderPlugin;
 
-  constructor(app: App, plugin: CodexLocalTranslatorPlugin) {
+  constructor(app: App, plugin: ContextualAIReaderPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
@@ -2159,7 +2159,7 @@ class CodexTranslatorSettingTab extends PluginSettingTab {
           });
 
         text.inputEl.rows = 6;
-        text.inputEl.addClass("codex-local-translator-settings-textarea");
+        text.inputEl.addClass("contextual-ai-reader-settings-textarea");
       });
 
     new Setting(containerEl)
@@ -2167,7 +2167,7 @@ class CodexTranslatorSettingTab extends PluginSettingTab {
       .setDesc("Vault path where selected passages are saved.")
       .addText((text) =>
         text
-          .setPlaceholder("Codex Translator Excerpts.md")
+          .setPlaceholder("Contextual AI Reader Excerpts.md")
           .setValue(this.plugin.settings.excerptFilePath)
           .onChange(async (value) => {
             this.plugin.settings.excerptFilePath = value.trim() || DEFAULT_SETTINGS.excerptFilePath;
@@ -3723,7 +3723,7 @@ function shouldIgnoreSelection(selection: Selection, popupEl?: HTMLElement): boo
     ".suggestion-container",
     ".menu",
     ".prompt",
-    ".codex-local-translator-popover"
+    ".contextual-ai-reader-popover"
   ].join(",")));
 }
 

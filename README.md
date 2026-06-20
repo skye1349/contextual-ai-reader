@@ -1,6 +1,6 @@
-# Codex Local Translator for Obsidian
+# Contextual AI Reader for Obsidian
 
-Translate selected text, whole notes, or batches of Markdown files in Obsidian through a locally logged-in AI coding assistant CLI.
+Read, translate, explain, and extract learning material from Markdown, PDFs, and YouTube videos in Obsidian through a locally logged-in AI coding assistant CLI.
 
 > This is an unofficial community plugin. It is not affiliated with OpenAI or Obsidian.
 
@@ -136,7 +136,7 @@ npm run build
 Manual install for development:
 
 ```text
-<vault>/.obsidian/plugins/codex-local-translator/
+<vault>/.obsidian/plugins/contextual-ai-reader/
 ```
 
 The plugin folder must contain:

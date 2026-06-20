@@ -1,9 +1,9 @@
 {
-  "id": "codex-local-translator",
-  "name": "Codex Local Translator",
+  "id": "contextual-ai-reader",
+  "name": "Contextual AI Reader",
   "version": "1.0.0",
   "minAppVersion": "1.5.0",
-  "description": "Translate selected Markdown and full notes through the locally logged-in Codex CLI.",
-  "author": "Codex Local Translator contributors",
+  "description": "AI reading companion for translation, contextual vocabulary, PDFs, YouTube transcripts, and Markdown notes.",
+  "author": "Contextual AI Reader contributors",
   "isDesktopOnly": true
 }

@@ -1,7 +1,7 @@
 {
-  "name": "codex-local-translator",
+  "name": "contextual-ai-reader",
   "version": "1.0.0",
-  "description": "Local Obsidian translator powered by the logged-in Codex CLI.",
+  "description": "AI reading companion for translation, contextual vocabulary, PDFs, YouTube transcripts, and Markdown notes.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
@@ -10,9 +10,12 @@
   "keywords": [
     "obsidian",
     "codex",
-    "translation"
+    "translation",
+    "reading",
+    "youtube",
+    "vocabulary"
   ],
-  "author": "Codex Local Translator contributors",
+  "author": "Contextual AI Reader contributors",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.15.21",
