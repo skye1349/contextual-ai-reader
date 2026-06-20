@@ -1920,12 +1920,16 @@ class TranslationProgressOverlay {
 }
 
 class YouTubePlayerView extends ItemView {
-  private iframe?: HTMLIFrameElement;
   private currentTimeTimer?: number;
-  private messageHandler?: (event: MessageEvent) => void;
   private titleEl?: HTMLElement;
-  private currentTime = 0;
   private videoId = "";
+  private webview?: HTMLElement & {
+    executeJavaScript?: (code: string, userGesture?: boolean) => Promise<any>;
+    getURL?: () => string;
+    loadURL?: (url: string) => void;
+    src?: string;
+  };
+  private currentTime = 0;
   private start = 0;
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: ContextualAIReaderPlugin) {
@@ -1950,6 +1954,7 @@ class YouTubePlayerView extends ItemView {
     const header = root.createDiv("contextual-ai-reader-youtube-player-header");
     this.titleEl = header.createDiv("contextual-ai-reader-youtube-player-title");
     this.titleEl.setText("YouTube Player");
+
     const screenshotButton = header.createEl("button", {
       cls: "contextual-ai-reader-youtube-player-button",
       attr: {
@@ -1964,38 +1969,68 @@ class YouTubePlayerView extends ItemView {
       void this.plugin.captureYouTubeScreenshotToNote();
     });
 
-    this.iframe = root.createEl("iframe", {
-      cls: "contextual-ai-reader-youtube-player-frame"
+    const webview = document.createElement("webview") as NonNullable<YouTubePlayerView["webview"]>;
+    webview.className = "contextual-ai-reader-youtube-player-webview";
+    webview.setAttribute("allowpopups", "");
+    webview.setAttribute("webpreferences", "contextIsolation=yes, sandbox=yes");
+    root.appendChild(webview);
+    this.webview = webview;
+
+    webview.addEventListener("dom-ready", () => {
+      void this.seekLoadedVideo(this.start, true);
+      this.startCurrentTimePolling();
     });
-    this.iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
-    this.iframe.allowFullscreen = true;
 
     if (this.videoId) {
-      this.refreshIframe();
+      this.loadVideo();
     }
   }
 
   async onClose() {
     this.stopCurrentTimePolling();
-    this.unregisterMessageHandler();
   }
 
   hasVideo(): boolean {
-    return Boolean(this.videoId && this.iframe);
+    return Boolean(this.videoId && this.webview);
   }
 
   async captureFramePng(): Promise<YouTubeScreenshot> {
-    if (!this.videoId || !this.iframe) {
+    if (!this.videoId || !this.webview?.executeJavaScript) {
       throw new Error("No YouTube video is open.");
     }
 
-    const rect = this.iframe.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) {
-      throw new Error("YouTube player is not visible.");
+    const result = await this.webview.executeJavaScript(`
+      (() => {
+        const video = document.querySelector('video');
+        if (!video) return { error: 'No video element found on the YouTube page.' };
+        const width = video.videoWidth || Math.round(video.getBoundingClientRect().width);
+        const height = video.videoHeight || Math.round(video.getBoundingClientRect().height);
+        if (!width || !height) return { error: 'Video frame is not ready yet.' };
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d', { alpha: false });
+        if (!ctx) return { error: 'Could not create canvas context.' };
+        ctx.drawImage(video, 0, 0, width, height);
+        return {
+          currentTime: video.currentTime || 0,
+          dataUrl: canvas.toDataURL('image/png')
+        };
+      })();
+    `, true);
+
+    if (result?.error) {
+      throw new Error(String(result.error));
+    }
+
+    const png = dataUrlToBuffer(String(result?.dataUrl ?? ""));
+    const currentTime = Number(result?.currentTime);
+    if (Number.isFinite(currentTime)) {
+      this.currentTime = currentTime;
     }
 
     return {
-      png: await capturePagePng(rect),
+      png,
       start: this.getCurrentTimestamp(),
       videoId: this.videoId
     };
@@ -2003,78 +2038,85 @@ class YouTubePlayerView extends ItemView {
 
   setVideo(videoId: string, start: number) {
     const normalizedStart = Math.max(0, Math.floor(start));
+    const isSameVideo = this.videoId === videoId;
     this.videoId = videoId;
     this.start = normalizedStart;
     this.currentTime = normalizedStart;
-    this.refreshIframe();
+    this.updateTitle();
+
+    if (!this.webview) return;
+
+    if (isSameVideo && this.isOnYouTubeWatchPage()) {
+      void this.seekLoadedVideo(normalizedStart, true);
+      return;
+    }
+
+    this.loadVideo();
+  }
+
+  private loadVideo() {
+    if (!this.webview || !this.videoId) return;
+    this.stopCurrentTimePolling();
+    const url = this.buildWatchUrl();
+    if (typeof this.webview.loadURL === "function") {
+      this.webview.loadURL(url);
+    } else {
+      this.webview.src = url;
+    }
+  }
+
+  private buildWatchUrl(): string {
+    const params = new URLSearchParams({
+      t: String(this.start),
+      v: this.videoId
+    });
+    return `https://www.youtube.com/watch?${params.toString()}`;
+  }
+
+  private isOnYouTubeWatchPage(): boolean {
+    const currentUrl = this.webview?.getURL?.() ?? this.webview?.src ?? "";
+    return currentUrl.includes("youtube.com/watch") && currentUrl.includes(this.videoId);
+  }
+
+  private async seekLoadedVideo(start: number, play: boolean) {
+    if (!this.webview?.executeJavaScript || !this.videoId) return;
+    const result = await this.webview.executeJavaScript(`
+      (() => {
+        const video = document.querySelector('video');
+        if (!video) return { ok: false, reason: 'No video element found.' };
+        video.currentTime = ${JSON.stringify(start)};
+        ${play ? "video.play?.().catch(() => {});" : ""}
+        return { ok: true, currentTime: video.currentTime || 0 };
+      })();
+    `, true).catch((error: unknown) => ({ ok: false, reason: getErrorMessage(error) }));
+
+    if (result?.ok) {
+      const currentTime = Number(result.currentTime);
+      if (Number.isFinite(currentTime)) {
+        this.currentTime = currentTime;
+      }
+      this.updateTitle();
+      new Notice(`YouTube → ${formatTimestamp(start)}`, 1200);
+    } else if (result?.reason) {
+      new Notice(`Could not seek YouTube video: ${result.reason}`, 4000);
+    }
   }
 
   private updateTitle() {
     if (this.titleEl) {
-      this.titleEl.setText(`YouTube · ${this.videoId} · ${formatTimestamp(this.getCurrentTimestamp())}`);
+      this.titleEl.setText(`YouTube · ${this.videoId || "No video"} · ${formatTimestamp(this.getCurrentTimestamp())}`);
     }
-  }
-
-  private refreshIframe() {
-    this.updateTitle();
-
-    if (!this.iframe || !this.videoId) return;
-
-    const nextSrc = this.buildEmbedUrl();
-
-    this.iframe.src = "about:blank";
-    this.stopCurrentTimePolling();
-    window.setTimeout(() => {
-      if (this.iframe) {
-        this.iframe.src = nextSrc;
-        this.registerMessageHandler();
-        this.startCurrentTimePolling();
-      }
-    }, 0);
-  }
-
-  private buildEmbedUrl(): string {
-    const params = new URLSearchParams({
-      autoplay: "1",
-      enablejsapi: "1",
-      modestbranding: "1",
-      rel: "0",
-      start: String(this.start)
-    });
-    return `https://www.youtube.com/embed/${encodeURIComponent(this.videoId)}?${params.toString()}`;
   }
 
   private getCurrentTimestamp(): number {
     return Math.max(0, Math.floor(this.currentTime || this.start));
   }
 
-  private registerMessageHandler() {
-    this.unregisterMessageHandler();
-    this.messageHandler = (event: MessageEvent) => {
-      if (event.source !== this.iframe?.contentWindow) return;
-      const data = parseYouTubePlayerMessage(event.data);
-      const currentTime = data?.info?.currentTime;
-      if (typeof currentTime === "number" && Number.isFinite(currentTime)) {
-        this.currentTime = currentTime;
-        this.updateTitle();
-      }
-    };
-    window.addEventListener("message", this.messageHandler);
-  }
-
-  private unregisterMessageHandler() {
-    if (this.messageHandler) {
-      window.removeEventListener("message", this.messageHandler);
-      this.messageHandler = undefined;
-    }
-  }
-
   private startCurrentTimePolling() {
     this.stopCurrentTimePolling();
-    window.setTimeout(() => this.sendYouTubeCommand("listening", undefined), 300);
     this.currentTimeTimer = window.setInterval(() => {
-      this.sendYouTubeCommand("getCurrentTime", []);
-    }, 1500);
+      void this.refreshCurrentTime();
+    }, 1000);
   }
 
   private stopCurrentTimePolling() {
@@ -2084,13 +2126,19 @@ class YouTubePlayerView extends ItemView {
     }
   }
 
-  private sendYouTubeCommand(func: string, args: unknown[] | undefined) {
-    const win = this.iframe?.contentWindow;
-    if (!win) return;
-    const payload = args === undefined
-      ? { event: func, id: YOUTUBE_PLAYER_VIEW_TYPE }
-      : { event: "command", func, args };
-    win.postMessage(JSON.stringify(payload), "https://www.youtube.com");
+  private async refreshCurrentTime() {
+    if (!this.webview?.executeJavaScript) return;
+    const value = await this.webview.executeJavaScript(`
+      (() => {
+        const video = document.querySelector('video');
+        return video ? video.currentTime || 0 : null;
+      })();
+    `, false).catch(() => null);
+    const currentTime = Number(value);
+    if (Number.isFinite(currentTime)) {
+      this.currentTime = currentTime;
+      this.updateTitle();
+    }
   }
 }
 
@@ -3851,63 +3899,21 @@ function buildYouTubeInternalSeekLink(videoId: string, start: number): string {
   return `#${YOUTUBE_INTERNAL_LINK_HASH}?${params.toString()}`;
 }
 
-async function capturePagePng(rect: DOMRect): Promise<Buffer> {
-  const win = getElectronCurrentWindow();
-  if (!win?.capturePage) {
-    throw new Error("Electron window capture is not available in this Obsidian environment.");
-  }
-
-  const image = await win.capturePage({
-    height: Math.max(1, Math.round(rect.height)),
-    width: Math.max(1, Math.round(rect.width)),
-    x: Math.max(0, Math.round(rect.left)),
-    y: Math.max(0, Math.round(rect.top))
-  });
-  const png = image?.toPNG?.();
-  if (!Buffer.isBuffer(png) || png.length === 0) {
-    throw new Error("Electron returned an empty screenshot.");
-  }
-  return png;
-}
-
-function getElectronCurrentWindow(): { capturePage?: (rect: { height: number; width: number; x: number; y: number }) => Promise<{ toPNG: () => Buffer }> } | null {
-  try {
-    const electron = require("electron");
-    const remote = electron.remote ?? tryRequire("@electron/remote");
-    return remote?.getCurrentWindow?.()
-      ?? electron.BrowserWindow?.getFocusedWindow?.()
-      ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function tryRequire(id: string): any {
-  try {
-    return require(id);
-  } catch {
-    return null;
-  }
-}
-
 function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
 }
 
-function parseYouTubePlayerMessage(data: unknown): { event?: string; info?: { currentTime?: number } } | null {
-  if (typeof data === "string") {
-    try {
-      return JSON.parse(data);
-    } catch {
-      return null;
-    }
+function dataUrlToBuffer(dataUrl: string): Buffer {
+  const match = dataUrl.match(/^data:image\/png;base64,(.+)$/);
+  if (!match) {
+    throw new Error("YouTube did not return a PNG screenshot.");
   }
 
-  if (data && typeof data === "object") {
-    return data as { event?: string; info?: { currentTime?: number } };
+  const buffer = Buffer.from(match[1], "base64");
+  if (buffer.length === 0) {
+    throw new Error("YouTube returned an empty screenshot.");
   }
-
-  return null;
+  return buffer;
 }
 
 function parseYouTubeInternalLink(href: string): { start: number; videoId: string } | null {
