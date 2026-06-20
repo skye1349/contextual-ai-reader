@@ -11,6 +11,8 @@ Translate selected text, whole notes, or batches of Markdown files in Obsidian t
 - Translate selected Markdown to Simplified Chinese.
 - Show a translation popup only when you hold `Command` while selecting text.
 - Look up a selected English word with instant local/cache definitions and optional AI context explanation.
+- Translate selected text from Obsidian-readable PDFs when the PDF text layer can be selected.
+- Extract public YouTube subtitles from a note URL into a Markdown transcript note.
 - Read selected English text aloud with the system text-to-speech voice.
 - Save selected passages to an excerpt note with source file and line references.
 - Translate the current Markdown file and append the Chinese version below the original.
@@ -67,6 +69,7 @@ Batch commands accept one file, folder, or wildcard per line.
 - `Translate current Markdown file: interleave Chinese paragraphs`
 - `Batch translate Markdown files: append Chinese below`
 - `Batch translate Markdown files: interleave Chinese paragraphs`
+- `Extract YouTube subtitles from current note`
 - `Check Codex login`
 
 ## Batch Scope Examples
@@ -94,6 +97,7 @@ Supported scope types:
 - `AI backend`: `Auto`, `Codex`, or `Claude Code`. Auto uses Codex when available, then falls back to Claude Code.
 - `Custom prompt / context`: add book, topic, terminology, style, or translation preferences.
 - `Excerpt file`: vault path for saved passages.
+- `YouTube transcript folder`: vault folder for extracted subtitle notes.
 - `Open excerpt file after saving`: open the excerpt note in a right-side split.
 - `Include translation in excerpts`: save the popup translation when available.
 - `Speech language`: defaults to `en-US`.

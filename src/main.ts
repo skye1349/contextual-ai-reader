@@ -44,6 +44,7 @@ interface CodexTranslatorSettings {
   speechRate: number;
   timeoutSeconds: number;
   vocabularyCache: Record<string, VocabularyCacheEntry>;
+  youtubeTranscriptFolder: string;
 }
 
 const DEFAULT_SETTINGS: CodexTranslatorSettings = {
@@ -66,7 +67,8 @@ const DEFAULT_SETTINGS: CodexTranslatorSettings = {
   speechLanguage: "en-US",
   speechRate: 0.92,
   timeoutSeconds: 90,
-  vocabularyCache: {}
+  vocabularyCache: {},
+  youtubeTranscriptFolder: "YouTube Transcripts"
 };
 
 const CODEX_CANDIDATES = [
@@ -167,6 +169,18 @@ interface VocabularyCard {
   word: string;
 }
 
+interface YouTubeTranscript {
+  entries: YouTubeTranscriptEntry[];
+  title: string;
+  videoId: string;
+}
+
+interface YouTubeTranscriptEntry {
+  duration: number;
+  start: number;
+  text: string;
+}
+
 export default class CodexLocalTranslatorPlugin extends Plugin {
   settings: CodexTranslatorSettings = DEFAULT_SETTINGS;
   private autoTimer?: number;
@@ -241,6 +255,14 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
       name: "Batch translate Markdown files: interleave Chinese paragraphs",
       callback: () => {
         new BatchScopeModal(this.app, "interleave", (scopeText) => this.batchTranslateFiles(scopeText, "interleave")).open();
+      }
+    });
+
+    this.addCommand({
+      id: "extract-youtube-subtitles-to-note",
+      name: "Extract YouTube subtitles from current note",
+      callback: () => {
+        void this.extractYouTubeSubtitlesFromCurrentNote();
       }
     });
 
@@ -1195,6 +1217,10 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
       };
     }
 
+    if (file.extension !== "md") {
+      return { path: file.path };
+    }
+
     const content = await this.app.vault.cachedRead(file);
     const range = findSelectionRange(content, sourceText);
 
@@ -1212,6 +1238,62 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
   private async openExcerptFile(file: TFile) {
     const leaf = this.app.workspace.getLeaf("split", "vertical");
     await leaf.openFile(file, { active: false });
+  }
+
+  private async extractYouTubeSubtitlesFromCurrentNote() {
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+
+    if (!activeView) {
+      new Notice("Open a Markdown note with a YouTube URL first.");
+      return;
+    }
+
+    const candidateText = activeView.editor.getSelection().trim() || activeView.getViewData();
+    const videoId = extractYouTubeVideoId(candidateText);
+
+    if (!videoId) {
+      new Notice("No YouTube URL found in the current note or selection.");
+      return;
+    }
+
+    this.setStatus("Fetching YouTube subtitles...");
+
+    try {
+      const transcript = await fetchYouTubeTranscript(videoId);
+
+      if (transcript.entries.length === 0) {
+        throw new Error("No subtitle entries found.");
+      }
+
+      const folder = normalizePath(this.settings.youtubeTranscriptFolder.trim() || DEFAULT_SETTINGS.youtubeTranscriptFolder);
+      const fileName = `${sanitizeFileName(transcript.title || transcript.videoId)} Transcript.md`;
+      const path = await this.getAvailableVaultPath(`${folder}/${fileName}`);
+      await this.ensureParentFolders(path);
+      const file = await this.app.vault.create(path, formatYouTubeTranscriptNote(transcript));
+      await this.openExcerptFile(file);
+      new Notice(`YouTube subtitles extracted: ${transcript.entries.length} lines.`);
+    } catch (error) {
+      new Notice(`Could not extract YouTube subtitles: ${getErrorMessage(error)}`, 9000);
+      console.error("Could not extract YouTube subtitles", error);
+    } finally {
+      this.setStatus("");
+    }
+  }
+
+  private async getAvailableVaultPath(path: string): Promise<string> {
+    const normalized = normalizePath(path);
+    const dotIndex = normalized.lastIndexOf(".");
+    const base = dotIndex >= 0 ? normalized.slice(0, dotIndex) : normalized;
+    const extension = dotIndex >= 0 ? normalized.slice(dotIndex) : "";
+    let candidate = normalized;
+    let counter = 2;
+
+    while (this.app.vault.getAbstractFileByPath(candidate)) {
+      candidate = `${base} ${counter}${extension}`;
+      counter++;
+    }
+
+    return candidate;
   }
 
   private async getVocabularyContext(sourceText: string): Promise<VocabularyContext> {
@@ -1823,6 +1905,19 @@ class CodexTranslatorSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.excerptFilePath)
           .onChange(async (value) => {
             this.plugin.settings.excerptFilePath = value.trim() || DEFAULT_SETTINGS.excerptFilePath;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("YouTube transcript folder")
+      .setDesc("Vault folder where extracted YouTube subtitle notes are saved.")
+      .addText((text) =>
+        text
+          .setPlaceholder("YouTube Transcripts")
+          .setValue(this.plugin.settings.youtubeTranscriptFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.youtubeTranscriptFolder = value.trim() || DEFAULT_SETTINGS.youtubeTranscriptFolder;
             await this.plugin.saveSettings();
           })
       );
@@ -2805,6 +2900,191 @@ function cleanSpeechText(text: string): string {
     .replace(/[#>*_~\-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function extractYouTubeVideoId(text: string): string | null {
+  const urlMatch = text.match(/https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/[^\s<>)"']+/i);
+  const raw = urlMatch?.[0] ?? text.trim();
+
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.replace(/^www\./, "");
+
+    if (host === "youtu.be") {
+      return normalizeYouTubeVideoId(url.pathname.split("/").filter(Boolean)[0] ?? "");
+    }
+
+    if (host.endsWith("youtube.com")) {
+      const byQuery = normalizeYouTubeVideoId(url.searchParams.get("v") ?? "");
+      if (byQuery) return byQuery;
+
+      const parts = url.pathname.split("/").filter(Boolean);
+      const markerIndex = parts.findIndex((part) => ["embed", "shorts", "live"].includes(part));
+      if (markerIndex >= 0) {
+        return normalizeYouTubeVideoId(parts[markerIndex + 1] ?? "");
+      }
+    }
+  } catch {
+    const looseMatch = raw.match(/(?:v=|youtu\.be\/|embed\/|shorts\/|live\/)([A-Za-z0-9_-]{11})/);
+    return normalizeYouTubeVideoId(looseMatch?.[1] ?? "");
+  }
+
+  return null;
+}
+
+function normalizeYouTubeVideoId(value: string): string | null {
+  const match = value.match(/^[A-Za-z0-9_-]{11}$/);
+  return match ? value : null;
+}
+
+async function fetchYouTubeTranscript(videoId: string): Promise<YouTubeTranscript> {
+  const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&hl=en`;
+  const watchResponse = await fetch(watchUrl);
+
+  if (!watchResponse.ok) {
+    throw new Error(`YouTube page HTTP ${watchResponse.status}`);
+  }
+
+  const html = await watchResponse.text();
+  const playerResponse = extractYouTubePlayerResponse(html);
+  const title = String(playerResponse?.videoDetails?.title ?? videoId);
+  const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+
+  if (!Array.isArray(tracks) || tracks.length === 0) {
+    throw new Error("This video does not expose public subtitles.");
+  }
+
+  const track = chooseCaptionTrack(tracks);
+  const baseUrl = String(track?.baseUrl ?? "");
+
+  if (!baseUrl) {
+    throw new Error("Subtitle track has no downloadable URL.");
+  }
+
+  const transcriptResponse = await fetch(baseUrl);
+
+  if (!transcriptResponse.ok) {
+    throw new Error(`Subtitle track HTTP ${transcriptResponse.status}`);
+  }
+
+  return {
+    entries: parseYouTubeTranscriptXml(await transcriptResponse.text()),
+    title,
+    videoId
+  };
+}
+
+function extractYouTubePlayerResponse(html: string): any {
+  const marker = "ytInitialPlayerResponse";
+  const markerIndex = html.indexOf(marker);
+
+  if (markerIndex < 0) {
+    throw new Error("Could not find YouTube player metadata.");
+  }
+
+  const start = html.indexOf("{", markerIndex);
+  if (start < 0) {
+    throw new Error("Could not parse YouTube player metadata.");
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < html.length; index++) {
+    const char = html[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+    } else if (char === "{") {
+      depth++;
+    } else if (char === "}") {
+      depth--;
+      if (depth === 0) {
+        return JSON.parse(html.slice(start, index + 1));
+      }
+    }
+  }
+
+  throw new Error("Could not parse YouTube player metadata.");
+}
+
+function chooseCaptionTrack(tracks: any[]): any {
+  return tracks.find((track) => String(track.languageCode ?? "").toLowerCase().startsWith("en") && !track.kind)
+    ?? tracks.find((track) => String(track.languageCode ?? "").toLowerCase().startsWith("en"))
+    ?? tracks.find((track) => !track.kind)
+    ?? tracks[0];
+}
+
+function parseYouTubeTranscriptXml(xml: string): YouTubeTranscriptEntry[] {
+  const doc = new DOMParser().parseFromString(xml, "text/xml");
+  const parseError = doc.querySelector("parsererror");
+
+  if (parseError) {
+    throw new Error("Could not parse subtitle XML.");
+  }
+
+  return Array.from(doc.querySelectorAll("text"))
+    .map((node) => ({
+      duration: Number.parseFloat(node.getAttribute("dur") ?? "0"),
+      start: Number.parseFloat(node.getAttribute("start") ?? "0"),
+      text: normalizeWhitespace(node.textContent ?? "")
+    }))
+    .filter((entry) => entry.text);
+}
+
+function formatYouTubeTranscriptNote(transcript: YouTubeTranscript): string {
+  const sourceUrl = `https://www.youtube.com/watch?v=${transcript.videoId}`;
+  const lines = [
+    `# ${transcript.title}`,
+    "",
+    `Source: ${sourceUrl}`,
+    "",
+    "## Transcript",
+    ""
+  ];
+
+  for (const entry of transcript.entries) {
+    const timestamp = formatTimestamp(entry.start);
+    const seekUrl = `${sourceUrl}&t=${Math.floor(entry.start)}s`;
+    lines.push(`- [${timestamp}](${seekUrl}) ${entry.text}`);
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+function formatTimestamp(seconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
+  const mm = String(minutes).padStart(2, "0");
+  const ss = String(secs).padStart(2, "0");
+
+  if (hours > 0) {
+    return `${hours}:${mm}:${ss}`;
+  }
+
+  return `${minutes}:${ss}`;
+}
+
+function sanitizeFileName(value: string): string {
+  return value
+    .replace(/[\\/:*?"<>|#^[\]]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120) || "YouTube Transcript";
 }
 
 async function getPreferredVoice(language: string): Promise<SpeechSynthesisVoice | null> {
