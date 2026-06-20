@@ -3102,13 +3102,38 @@ async function fetchYouTubeTranscript(videoId: string): Promise<YouTubeTranscrip
     throw new Error("Subtitle track has no downloadable URL.");
   }
 
-  const subtitleText = await fetchTextWithNode(withYouTubeCaptionFormat(baseUrl, "json3"));
-
   return {
-    entries: parseYouTubeTranscript(subtitleText),
+    entries: await fetchAndParseYouTubeCaptionTrack(baseUrl),
     title,
     videoId
   };
+}
+
+async function fetchAndParseYouTubeCaptionTrack(baseUrl: string): Promise<YouTubeTranscriptEntry[]> {
+  const urls = [
+    withYouTubeCaptionFormat(baseUrl, "json3"),
+    withYouTubeCaptionFormat(baseUrl, "srv3"),
+    withYouTubeCaptionFormat(baseUrl, "vtt"),
+    baseUrl
+  ];
+  const failures: string[] = [];
+
+  for (const url of urls) {
+    try {
+      const rawText = await fetchTextWithNode(url);
+      const entries = parseYouTubeTranscript(rawText);
+
+      if (entries.length > 0) {
+        return entries;
+      }
+
+      failures.push("empty subtitle response");
+    } catch (error) {
+      failures.push(getErrorMessage(error));
+    }
+  }
+
+  throw new Error(`Could not parse YouTube subtitle data after trying ${urls.length} formats. Last error: ${failures.at(-1) ?? "unknown"}`);
 }
 
 function fetchTextWithNode(url: string, redirectCount = 0): Promise<string> {
