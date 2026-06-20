@@ -301,6 +301,17 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
 
     this.addSettingTab(new CodexTranslatorSettingTab(this.app, this));
 
+    this.registerDomEvent(document, "click", (event) => {
+      const link = getClosestAnchor(event.target);
+      const target = parseYouTubeInternalLink(link?.getAttribute("href") ?? "");
+      if (!target) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      void this.openYouTubeVideo(target.videoId, target.start);
+    }, true);
+
     this.registerMarkdownPostProcessor((element) => {
       element.querySelectorAll<HTMLAnchorElement>('a[href^="codex-youtube://"]').forEach((link) => {
         link.addEventListener("click", (event) => {
@@ -1293,8 +1304,8 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
     const leaves = this.app.workspace.getLeavesOfType(YOUTUBE_PLAYER_VIEW_TYPE);
     const leaf = leaves[0] ?? this.app.workspace.getLeaf("split", "vertical");
 
-    if (!leaves[0]) {
-      await leaf.setViewState({ type: YOUTUBE_PLAYER_VIEW_TYPE, active: true });
+    if (leaf.view.getViewType() !== YOUTUBE_PLAYER_VIEW_TYPE) {
+      await leaf.setViewState({ type: YOUTUBE_PLAYER_VIEW_TYPE, active: false });
     }
 
     const view = leaf.view;
@@ -1827,11 +1838,19 @@ class YouTubePlayerView extends ItemView {
 
     const params = new URLSearchParams({
       autoplay: "1",
+      enablejsapi: "1",
       modestbranding: "1",
       rel: "0",
       start: String(this.start)
     });
-    this.iframe.src = `https://www.youtube.com/embed/${encodeURIComponent(this.videoId)}?${params.toString()}`;
+    const nextSrc = `https://www.youtube.com/embed/${encodeURIComponent(this.videoId)}?${params.toString()}`;
+
+    this.iframe.src = "about:blank";
+    window.setTimeout(() => {
+      if (this.iframe) {
+        this.iframe.src = nextSrc;
+      }
+    }, 0);
   }
 }
 
@@ -3184,7 +3203,7 @@ function formatYouTubeTranscriptNote(transcript: YouTubeTranscript): string {
 
   for (const entry of transcript.entries) {
     const timestamp = formatTimestamp(entry.start);
-    const seekUrl = `codex-youtube://${transcript.videoId}?t=${Math.floor(entry.start)}`;
+    const seekUrl = `codex-youtube://seek?v=${encodeURIComponent(transcript.videoId)}&t=${Math.floor(entry.start)}`;
     lines.push(`- [${timestamp}](${seekUrl}) ${entry.text}`);
   }
 
@@ -3198,7 +3217,9 @@ function parseYouTubeInternalLink(href: string): { start: number; videoId: strin
       return null;
     }
 
-    const videoId = normalizeYouTubeVideoId(url.hostname);
+    const videoId = normalizeYouTubeVideoId(url.searchParams.get("v") ?? "")
+      ?? normalizeYouTubeVideoId(url.pathname.replace(/^\/+/, ""))
+      ?? normalizeYouTubeVideoId(url.hostname);
     if (!videoId) {
       return null;
     }
@@ -3385,6 +3406,14 @@ function eventTargetInside(event: Event, element: HTMLElement): boolean {
 
   const target = event.target;
   return target instanceof Node && element.contains(target);
+}
+
+function getClosestAnchor(target: EventTarget | null): HTMLAnchorElement | null {
+  if (!(target instanceof Element)) {
+    return null;
+  }
+
+  return target.closest("a");
 }
 
 function getSelectionElement(node: Node | null): Element | null {
