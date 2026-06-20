@@ -283,7 +283,11 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
         this.commandSelectionGestureUntil = Date.now() + 700;
       }
     }, true);
-    this.registerDomEvent(window, "scroll", () => {
+    this.registerDomEvent(window, "scroll", (event) => {
+      if (this.popupEl && eventTargetInside(event, this.popupEl)) {
+        return;
+      }
+
       this.hidePopup();
     }, true);
     this.registerDomEvent(window, "resize", () => {
@@ -1471,6 +1475,8 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
     const popup = document.createElement("div");
     popup.className = "codex-local-translator-popover";
     popup.style.display = "none";
+    popup.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
+    popup.addEventListener("touchmove", (event) => event.stopPropagation(), { passive: true });
     document.body.appendChild(popup);
     this.popupEl = popup;
 
@@ -2882,6 +2888,16 @@ function shouldIgnoreSelection(selection: Selection, popupEl?: HTMLElement): boo
     ".prompt",
     ".codex-local-translator-popover"
   ].join(",")));
+}
+
+function eventTargetInside(event: Event, element: HTMLElement): boolean {
+  const path = event.composedPath?.() ?? [];
+  if (path.includes(element)) {
+    return true;
+  }
+
+  const target = event.target;
+  return target instanceof Node && element.contains(target);
 }
 
 function getSelectionElement(node: Node | null): Element | null {
