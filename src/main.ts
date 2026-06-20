@@ -326,14 +326,13 @@ export default class ContextualAIReaderPlugin extends Plugin {
     this.addSettingTab(new ContextualAIReaderSettingTab(this.app, this));
 
     const handleYouTubeTimestampEvent = (event: MouseEvent) => {
-      const link = getClosestAnchor(event.target);
-      const target = parseYouTubeInternalLink(link?.getAttribute("href") ?? "");
+      const target = getYouTubeTimestampTarget(event.target);
       if (!target) return;
 
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
-      void this.openYouTubeVideo(target.videoId, target.start);
+      void this.openYouTubeVideo(target.videoId, target.start, true);
     };
 
     this.registerDomEvent(document, "mousedown", handleYouTubeTimestampEvent, true);
@@ -343,20 +342,23 @@ export default class ContextualAIReaderPlugin extends Plugin {
     this.registerMarkdownPostProcessor((element) => {
       element.querySelectorAll<HTMLAnchorElement>('a[href^="codex-youtube://"], a[href*="#contextual-ai-reader-youtube"]').forEach((link) => {
         const target = parseYouTubeInternalLink(link.getAttribute("href") ?? "");
-        if (target) {
-          link.href = buildYouTubeInternalSeekLink(target.videoId, target.start);
-          link.removeAttribute("target");
-          link.addClass("contextual-ai-reader-youtube-timestamp");
+        if (!target) {
+          return;
         }
 
-        link.addEventListener("click", (event) => {
-          const target = parseYouTubeInternalLink(link.getAttribute("href") ?? "");
-          if (!target) return;
-
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "contextual-ai-reader-youtube-timestamp";
+        button.dataset.videoId = target.videoId;
+        button.dataset.start = String(target.start);
+        button.title = `Jump YouTube player to ${formatTimestamp(target.start)}`;
+        button.setText(link.getText() || formatTimestamp(target.start));
+        button.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
-          void this.openYouTubeVideo(target.videoId, target.start);
+          void this.openYouTubeVideo(target.videoId, target.start, true);
         });
+        link.replaceWith(button);
       });
     });
 
@@ -1330,7 +1332,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
     await this.openYouTubeVideo(videoId, 0);
   }
 
-  private async openYouTubeVideo(videoId: string, start: number) {
+  private async openYouTubeVideo(videoId: string, start: number, notify = false) {
     const leaves = this.app.workspace.getLeavesOfType(YOUTUBE_PLAYER_VIEW_TYPE);
     const leaf = leaves[0] ?? this.app.workspace.getLeaf("split", "vertical");
 
@@ -1342,6 +1344,9 @@ export default class ContextualAIReaderPlugin extends Plugin {
     if (view instanceof YouTubePlayerView) {
       view.setVideo(videoId, start);
       this.app.workspace.revealLeaf(leaf);
+      if (notify) {
+        new Notice(`YouTube → ${formatTimestamp(start)}`, 1800);
+      }
     }
   }
 
@@ -1860,12 +1865,12 @@ class YouTubePlayerView extends ItemView {
 
   async onOpen() {
     this.containerEl.empty();
-    const root = this.containerEl.createDiv("codex-youtube-player-view");
-    this.titleEl = root.createDiv("codex-youtube-player-title");
+    const root = this.containerEl.createDiv("contextual-ai-reader-youtube-player-view");
+    this.titleEl = root.createDiv("contextual-ai-reader-youtube-player-title");
     this.titleEl.setText("YouTube Player");
 
     this.iframe = root.createEl("iframe", {
-      cls: "codex-youtube-player-frame"
+      cls: "contextual-ai-reader-youtube-player-frame"
     });
     this.iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
     this.iframe.allowFullscreen = true;
@@ -1877,13 +1882,6 @@ class YouTubePlayerView extends ItemView {
 
   setVideo(videoId: string, start: number) {
     const normalizedStart = Math.max(0, Math.floor(start));
-    if (this.videoId === videoId && this.iframe?.src) {
-      this.start = normalizedStart;
-      this.updateTitle();
-      this.seekIframe(normalizedStart);
-      return;
-    }
-
     this.videoId = videoId;
     this.start = normalizedStart;
     this.refreshIframe();
@@ -1900,14 +1898,7 @@ class YouTubePlayerView extends ItemView {
 
     if (!this.iframe || !this.videoId) return;
 
-    const params = new URLSearchParams({
-      autoplay: "1",
-      enablejsapi: "1",
-      modestbranding: "1",
-      rel: "0",
-      start: String(this.start)
-    });
-    const nextSrc = `https://www.youtube.com/embed/${encodeURIComponent(this.videoId)}?${params.toString()}`;
+    const nextSrc = this.buildEmbedUrl();
 
     this.iframe.src = "about:blank";
     window.setTimeout(() => {
@@ -1917,23 +1908,15 @@ class YouTubePlayerView extends ItemView {
     }, 0);
   }
 
-  private seekIframe(start: number) {
-    const win = this.iframe?.contentWindow;
-    if (!win) {
-      this.refreshIframe();
-      return;
-    }
-
-    win.postMessage(JSON.stringify({
-      event: "command",
-      func: "seekTo",
-      args: [start, true]
-    }), "https://www.youtube.com");
-    win.postMessage(JSON.stringify({
-      event: "command",
-      func: "playVideo",
-      args: []
-    }), "https://www.youtube.com");
+  private buildEmbedUrl(): string {
+    const params = new URLSearchParams({
+      autoplay: "1",
+      enablejsapi: "1",
+      modestbranding: "1",
+      rel: "0",
+      start: String(this.start)
+    });
+    return `https://www.youtube.com/embed/${encodeURIComponent(this.videoId)}?${params.toString()}`;
   }
 }
 
@@ -2023,7 +2006,7 @@ class YouTubeUrlModal extends Modal {
 
     const input = document.createElement("input");
     input.type = "text";
-    input.className = "codex-youtube-url-input";
+    input.className = "contextual-ai-reader-youtube-url-input";
     input.placeholder = "https://www.youtube.com/watch?v=...";
     input.value = this.initialUrl;
     this.contentEl.appendChild(input);
@@ -2031,7 +2014,7 @@ class YouTubeUrlModal extends Modal {
     let openVideoCheckbox: HTMLInputElement | null = null;
     if (this.includeOpenVideoOption) {
       const optionLabel = document.createElement("label");
-      optionLabel.className = "codex-youtube-option";
+      optionLabel.className = "contextual-ai-reader-youtube-option";
       openVideoCheckbox = document.createElement("input");
       openVideoCheckbox.type = "checkbox";
       openVideoCheckbox.checked = true;
@@ -3914,6 +3897,25 @@ function getClosestAnchor(target: EventTarget | null): HTMLAnchorElement | null 
   }
 
   return target.closest("a");
+}
+
+function getYouTubeTimestampTarget(target: EventTarget | null): { start: number; videoId: string } | null {
+  if (!(target instanceof Element)) {
+    return null;
+  }
+
+  const timestampButton = target.closest<HTMLElement>("[data-video-id][data-start]");
+  if (timestampButton?.dataset.videoId) {
+    const videoId = normalizeYouTubeVideoId(timestampButton.dataset.videoId);
+    if (videoId) {
+      return {
+        start: Number.parseInt(timestampButton.dataset.start ?? "0", 10) || 0,
+        videoId
+      };
+    }
+  }
+
+  return parseYouTubeInternalLink(getClosestAnchor(target)?.getAttribute("href") ?? "");
 }
 
 function getSelectionElement(node: Node | null): Element | null {
