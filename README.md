@@ -1,6 +1,6 @@
-# Contextual AI Reader for Obsidian
+# Contextual AI Reader
 
-Contextual AI Reader is an Obsidian desktop plugin for reading English material with AI-assisted Chinese translation, vocabulary explanation, text-to-speech, excerpts, and Markdown file translation.
+Contextual AI Reader is a desktop reading companion for English material with AI-assisted Chinese translation, vocabulary explanation, text-to-speech, excerpts, and Markdown file translation.
 
 It can use local AI assistant CLIs such as Codex and Claude Code, or direct API-token backends such as OpenAI and Anthropic.
 
