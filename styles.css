@@ -119,6 +119,21 @@
   font-family: var(--font-monospace);
 }
 
+.codex-youtube-url-input {
+  box-sizing: border-box;
+  width: 100%;
+  font-family: var(--font-monospace);
+}
+
+.codex-youtube-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 .codex-local-translator-batch-actions {
   display: flex;
   gap: 8px;

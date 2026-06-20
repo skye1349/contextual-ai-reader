@@ -1,7 +1,7 @@
 import { spawn } from "child_process";
 import { existsSync, readdirSync } from "fs";
 import { mkdtemp, readFile, rm } from "fs/promises";
-import { get as httpsGet } from "https";
+import { request as httpsRequest } from "https";
 import { homedir, tmpdir } from "os";
 import { join } from "path";
 import {
@@ -18,6 +18,7 @@ import {
   TFolder,
   WorkspaceLeaf,
   normalizePath,
+  requestUrl,
   setIcon
 } from "obsidian";
 
@@ -27,6 +28,17 @@ type FullDocumentInsertMode = "append" | "interleave";
 type AIBackend = "auto" | "codex" | "claude";
 
 const YOUTUBE_PLAYER_VIEW_TYPE = "codex-local-translator-youtube-player";
+const INNERTUBE_API_KEY = "PUBLIC_INNERTUBE_KEY_REMOVED";
+const INNERTUBE_PLAYER_URL = `https://www.youtube.com/youtubei/v1/player?key=${INNERTUBE_API_KEY}`;
+const INNERTUBE_IOS_USER_AGENT = "com.google.ios.youtube/20.10.38 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)";
+const INNERTUBE_IOS_CONTEXT = {
+  client: {
+    clientName: "IOS",
+    clientVersion: "20.10.38",
+    gl: "US",
+    hl: "en"
+  }
+};
 
 interface CodexTranslatorSettings {
   aiBackend: AIBackend;
@@ -184,6 +196,11 @@ interface YouTubeTranscriptEntry {
   duration: number;
   start: number;
   text: string;
+}
+
+interface YouTubeInputResult {
+  openVideo: boolean;
+  url: string;
 }
 
 export default class CodexLocalTranslatorPlugin extends Plugin {
@@ -1283,18 +1300,13 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
   }
 
   private async openYouTubeVideoFromCurrentNote() {
-    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const input = await this.promptForYouTubeUrl("Open YouTube video", false);
+    if (!input?.url) return;
 
-    if (!activeView) {
-      new Notice("Open a Markdown note with a YouTube URL first.");
-      return;
-    }
-
-    const candidateText = activeView.editor.getSelection().trim() || activeView.getViewData();
-    const videoId = extractYouTubeVideoId(candidateText);
+    const videoId = extractYouTubeVideoId(input.url);
 
     if (!videoId) {
-      new Notice("No YouTube URL found in the current note or selection.");
+      new Notice("Enter a valid YouTube URL.");
       return;
     }
 
@@ -1317,25 +1329,22 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
   }
 
   private async extractYouTubeSubtitlesFromCurrentNote() {
-    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const input = await this.promptForYouTubeUrl("Extract YouTube subtitles", true);
+    if (!input?.url) return;
 
-    if (!activeView) {
-      new Notice("Open a Markdown note with a YouTube URL first.");
-      return;
-    }
-
-    const candidateText = activeView.editor.getSelection().trim() || activeView.getViewData();
-    const videoId = extractYouTubeVideoId(candidateText);
+    const videoId = extractYouTubeVideoId(input.url);
 
     if (!videoId) {
-      new Notice("No YouTube URL found in the current note or selection.");
+      new Notice("Enter a valid YouTube URL.");
       return;
     }
 
     this.setStatus("Fetching YouTube subtitles...");
 
     try {
-      await this.openYouTubeVideo(videoId, 0);
+      if (input.openVideo) {
+        await this.openYouTubeVideo(videoId, 0);
+      }
       const transcript = await fetchYouTubeTranscript(videoId);
 
       if (transcript.entries.length === 0) {
@@ -1355,6 +1364,31 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
     } finally {
       this.setStatus("");
     }
+  }
+
+  private async promptForYouTubeUrl(title: string, includeOpenVideoOption: boolean): Promise<YouTubeInputResult | null> {
+    const initialUrl = await this.detectYouTubeUrl();
+    return new Promise((resolve) => {
+      new YouTubeUrlModal(this.app, title, initialUrl, includeOpenVideoOption, resolve).open();
+    });
+  }
+
+  private async detectYouTubeUrl(): Promise<string> {
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const noteText = activeView
+      ? activeView.editor.getSelection().trim() || activeView.getViewData()
+      : "";
+    const noteUrl = extractYouTubeUrl(noteText);
+    if (noteUrl) return noteUrl;
+
+    try {
+      const clipboardUrl = extractYouTubeUrl(await navigator.clipboard.readText());
+      if (clipboardUrl) return clipboardUrl;
+    } catch {
+      // Clipboard access can be denied; the modal still opens empty.
+    }
+
+    return "";
   }
 
   private async getAvailableVaultPath(path: string): Promise<string> {
@@ -1916,6 +1950,91 @@ class BatchScopeModal extends Modal {
     this.contentEl.appendChild(actions);
 
     window.setTimeout(() => textarea.focus(), 0);
+  }
+}
+
+class YouTubeUrlModal extends Modal {
+  constructor(
+    app: App,
+    private readonly titleText: string,
+    private readonly initialUrl: string,
+    private readonly includeOpenVideoOption: boolean,
+    private readonly onSubmit: (result: YouTubeInputResult | null) => void
+  ) {
+    super(app);
+  }
+
+  onOpen() {
+    this.setTitle(this.titleText);
+    this.contentEl.empty();
+
+    const description = document.createElement("p");
+    description.className = "codex-local-translator-batch-description";
+    description.setText("Paste a YouTube URL. The plugin will open the video in an Obsidian tab and can extract public subtitles into a note.");
+    this.contentEl.appendChild(description);
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "codex-youtube-url-input";
+    input.placeholder = "https://www.youtube.com/watch?v=...";
+    input.value = this.initialUrl;
+    this.contentEl.appendChild(input);
+
+    let openVideoCheckbox: HTMLInputElement | null = null;
+    if (this.includeOpenVideoOption) {
+      const optionLabel = document.createElement("label");
+      optionLabel.className = "codex-youtube-option";
+      openVideoCheckbox = document.createElement("input");
+      openVideoCheckbox.type = "checkbox";
+      openVideoCheckbox.checked = true;
+      optionLabel.appendChild(openVideoCheckbox);
+      optionLabel.appendText("Open video tab while extracting");
+      this.contentEl.appendChild(optionLabel);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "codex-local-translator-batch-actions";
+
+    const cancelButton = document.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.setText("Cancel");
+    cancelButton.addEventListener("click", () => {
+      this.close();
+      this.onSubmit(null);
+    });
+
+    const startButton = document.createElement("button");
+    startButton.type = "button";
+    startButton.className = "mod-cta";
+    startButton.setText("Start");
+    startButton.addEventListener("click", () => {
+      const url = input.value.trim();
+      if (!extractYouTubeVideoId(url)) {
+        new Notice("Enter a valid YouTube URL.");
+        return;
+      }
+
+      this.close();
+      this.onSubmit({
+        openVideo: openVideoCheckbox?.checked ?? true,
+        url
+      });
+    });
+
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        startButton.click();
+      }
+    });
+
+    actions.appendChild(cancelButton);
+    actions.appendChild(startButton);
+    this.contentEl.appendChild(actions);
+
+    window.setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 0);
   }
 }
 
@@ -3050,8 +3169,8 @@ function cleanSpeechText(text: string): string {
 }
 
 function extractYouTubeVideoId(text: string): string | null {
-  const urlMatch = text.match(/https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/[^\s<>)"']+/i);
-  const raw = urlMatch?.[0] ?? text.trim();
+  const urlMatch = extractYouTubeUrl(text);
+  const raw = urlMatch ?? text.trim();
 
   try {
     const url = new URL(raw);
@@ -3079,15 +3198,17 @@ function extractYouTubeVideoId(text: string): string | null {
   return null;
 }
 
+function extractYouTubeUrl(text: string): string | null {
+  return text.match(/https?:\/\/(?:www\.)?(?:(?:m\.|mobile\.|music\.)?youtube\.com|youtube-nocookie\.com|youtu\.be)\/[^\s<>)"']+/i)?.[0] ?? null;
+}
+
 function normalizeYouTubeVideoId(value: string): string | null {
   const match = value.match(/^[A-Za-z0-9_-]{11}$/);
   return match ? value : null;
 }
 
 async function fetchYouTubeTranscript(videoId: string): Promise<YouTubeTranscript> {
-  const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&hl=en`;
-  const html = await fetchTextWithNode(watchUrl);
-  const playerResponse = extractYouTubePlayerResponse(html);
+  const playerResponse = await fetchYouTubePlayerData(videoId);
   const title = String(playerResponse?.videoDetails?.title ?? videoId);
   const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
 
@@ -3109,18 +3230,52 @@ async function fetchYouTubeTranscript(videoId: string): Promise<YouTubeTranscrip
   };
 }
 
+async function fetchYouTubePlayerData(videoId: string): Promise<any> {
+  const responseText = await requestText({
+    body: JSON.stringify({
+      context: INNERTUBE_IOS_CONTEXT,
+      videoId
+    }),
+    headers: {
+      "Content-Type": "application/json",
+      "User-Agent": INNERTUBE_IOS_USER_AGENT
+    },
+    method: "POST",
+    url: INNERTUBE_PLAYER_URL
+  });
+  const data = JSON.parse(responseText);
+  const status = data.playabilityStatus;
+
+  if (status?.status === "LOGIN_REQUIRED") {
+    throw new Error("This video requires login to view.");
+  }
+
+  if (status?.status === "ERROR" || status?.status === "UNPLAYABLE") {
+    throw new Error(status.reason || "This video is not playable.");
+  }
+
+  return data;
+}
+
 async function fetchAndParseYouTubeCaptionTrack(baseUrl: string): Promise<YouTubeTranscriptEntry[]> {
   const urls = [
-    withYouTubeCaptionFormat(baseUrl, "json3"),
+    baseUrl,
     withYouTubeCaptionFormat(baseUrl, "srv3"),
-    withYouTubeCaptionFormat(baseUrl, "vtt"),
-    baseUrl
+    withYouTubeCaptionFormat(baseUrl, "json3"),
+    withYouTubeCaptionFormat(baseUrl, "vtt")
   ];
   const failures: string[] = [];
 
   for (const url of urls) {
     try {
-      const rawText = await fetchTextWithNode(url);
+      const rawText = await requestText({
+        headers: {
+          "Accept-Language": "en-US,en;q=0.9",
+          "User-Agent": INNERTUBE_IOS_USER_AGENT
+        },
+        method: "GET",
+        url
+      });
       const entries = parseYouTubeTranscript(rawText);
 
       if (entries.length > 0) {
@@ -3136,13 +3291,53 @@ async function fetchAndParseYouTubeCaptionTrack(baseUrl: string): Promise<YouTub
   throw new Error(`Could not parse YouTube subtitle data after trying ${urls.length} formats. Last error: ${failures.at(-1) ?? "unknown"}`);
 }
 
-function fetchTextWithNode(url: string, redirectCount = 0): Promise<string> {
+function chooseCaptionTrack(tracks: any[]): any {
+  return tracks.find((track) => String(track.languageCode ?? "").toLowerCase().startsWith("en") && !track.kind)
+    ?? tracks.find((track) => String(track.languageCode ?? "").toLowerCase().startsWith("en"))
+    ?? tracks.find((track) => !track.kind)
+    ?? tracks[0];
+}
+
+function withYouTubeCaptionFormat(baseUrl: string, format: string): string {
+  const url = new URL(baseUrl);
+  url.searchParams.set("fmt", format);
+  return url.toString();
+}
+
+async function requestText(request: {
+  body?: string;
+  headers?: Record<string, string>;
+  method: "GET" | "POST";
+  url: string;
+}): Promise<string> {
+  if (typeof requestUrl === "function") {
+    const response = await requestUrl({
+      body: request.body,
+      headers: request.headers,
+      method: request.method,
+      url: request.url
+    });
+    return response.text;
+  }
+
+  return requestTextWithNode(request);
+}
+
+function requestTextWithNode(request: {
+  body?: string;
+  headers?: Record<string, string>;
+  method: "GET" | "POST";
+  url: string;
+}, redirectCount = 0): Promise<string> {
   return new Promise((resolve, reject) => {
-    const request = httpsGet(url, {
-      headers: {
-        "accept-language": "en-US,en;q=0.9",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
-      }
+    const url = new URL(request.url);
+    const req = httpsRequest({
+      headers: request.headers,
+      hostname: url.hostname,
+      method: request.method,
+      path: `${url.pathname}${url.search}`,
+      port: url.port ? Number(url.port) : 443,
+      protocol: url.protocol
     }, (response) => {
       const statusCode = response.statusCode ?? 0;
       const location = response.headers.location;
@@ -3154,8 +3349,10 @@ function fetchTextWithNode(url: string, redirectCount = 0): Promise<string> {
           return;
         }
 
-        const nextUrl = new URL(location, url).toString();
-        fetchTextWithNode(nextUrl, redirectCount + 1).then(resolve, reject);
+        requestTextWithNode({
+          ...request,
+          url: new URL(location, request.url).toString()
+        }, redirectCount + 1).then(resolve, reject);
         return;
       }
 
@@ -3171,70 +3368,16 @@ function fetchTextWithNode(url: string, redirectCount = 0): Promise<string> {
       response.on("end", () => resolve(body));
     });
 
-    request.on("error", reject);
-    request.setTimeout(20_000, () => {
-      request.destroy(new Error("Timed out while fetching YouTube subtitles."));
+    req.on("error", reject);
+    req.setTimeout(20_000, () => {
+      req.destroy(new Error("Timed out while fetching YouTube subtitles."));
     });
+
+    if (request.body) {
+      req.write(request.body);
+    }
+    req.end();
   });
-}
-
-function extractYouTubePlayerResponse(html: string): any {
-  const marker = "ytInitialPlayerResponse";
-  const markerIndex = html.indexOf(marker);
-
-  if (markerIndex < 0) {
-    throw new Error("Could not find YouTube player metadata.");
-  }
-
-  const start = html.indexOf("{", markerIndex);
-  if (start < 0) {
-    throw new Error("Could not parse YouTube player metadata.");
-  }
-
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-
-  for (let index = start; index < html.length; index++) {
-    const char = html[index];
-
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === "\"") {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (char === "\"") {
-      inString = true;
-    } else if (char === "{") {
-      depth++;
-    } else if (char === "}") {
-      depth--;
-      if (depth === 0) {
-        return JSON.parse(html.slice(start, index + 1));
-      }
-    }
-  }
-
-  throw new Error("Could not parse YouTube player metadata.");
-}
-
-function chooseCaptionTrack(tracks: any[]): any {
-  return tracks.find((track) => String(track.languageCode ?? "").toLowerCase().startsWith("en") && !track.kind)
-    ?? tracks.find((track) => String(track.languageCode ?? "").toLowerCase().startsWith("en"))
-    ?? tracks.find((track) => !track.kind)
-    ?? tracks[0];
-}
-
-function withYouTubeCaptionFormat(baseUrl: string, format: string): string {
-  const url = new URL(baseUrl);
-  url.searchParams.set("fmt", format);
-  return url.toString();
 }
 
 function parseYouTubeTranscript(rawText: string): YouTubeTranscriptEntry[] {
