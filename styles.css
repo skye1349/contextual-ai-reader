@@ -92,6 +92,14 @@
   font-size: 12px;
 }
 
+.codex-local-translator-usage {
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+
 .codex-local-translator-settings-textarea {
   min-width: 360px;
   min-height: 120px;

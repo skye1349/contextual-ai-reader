@@ -133,8 +133,10 @@ interface ClaudeJsonResult {
 }
 
 interface TokenUsage {
+  cachedInput: number;
   input: number;
   output: number;
+  reasoningOutput: number;
 }
 
 interface VocabularyCacheEntry {
@@ -154,6 +156,7 @@ interface VocabularyCard {
   contextExplanation?: string;
   errorText?: string;
   status: "idle" | "loading" | "done" | "error";
+  tokenUsage?: TokenUsage;
   word: string;
 }
 
@@ -163,7 +166,7 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
   private commandSelectionGestureUntil = 0;
   private currentKills = new Set<() => void>();
   private operationCancelled = false;
-  private sessionTokens: TokenUsage = { input: 0, output: 0 };
+  private sessionTokens: TokenUsage = createEmptyTokenUsage();
   private onTokensUpdate?: (tokens: TokenUsage) => void;
   private isCommandKeyPressed = false;
   private popupEl?: HTMLDivElement;
@@ -423,7 +426,7 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
         if (requestId !== this.requestSerial) return;
         if (quickDefinition && quickDefinition.toLowerCase() !== word.toLowerCase()) {
           baseDefinition = quickDefinition;
-          this.rememberVocabulary(cacheKey, {
+          await this.rememberVocabulary(cacheKey, {
             word,
             baseDefinition,
             updatedAt: Date.now()
@@ -463,7 +466,7 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
       if (requestId !== this.requestSerial) return;
       if (!explanation) throw new Error(`${backendLabel} returned an empty explanation.`);
 
-      this.rememberVocabulary(cacheKey, {
+      await this.rememberVocabulary(cacheKey, {
         word,
         baseDefinition,
         contextExplanation: explanation,
@@ -473,7 +476,8 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
         word,
         baseDefinition,
         contextExplanation: explanation,
-        status: "done"
+        status: "done",
+        tokenUsage: this.getCurrentTokenUsage()
       }, sourceText, context, rect, requestId, cacheKey);
     } catch (error) {
       if (requestId !== this.requestSerial) return;
@@ -509,7 +513,7 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
       if (requestId !== this.requestSerial) return;
       if (!translation) throw new Error(`${backendLabel} returned an empty translation.`);
       this.rememberTranslation(sourceText, translation);
-      this.showPopup(translation, sourceText, rect, "done");
+      this.showPopup(translation, sourceText, rect, "done", this.getCurrentTokenUsage());
       this.addPopupRefineButton(sourceText, rect, requestId);
     } catch (error) {
       window.clearInterval(timerInterval);
@@ -573,7 +577,7 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
         editor.replaceSelection(translation.trim());
       }
 
-      new Notice("Translation complete.");
+      new Notice(`Translation complete.${this.tokenUsageSuffix()}`, 9000);
     } catch (error) {
       window.clearInterval(timerInterval);
       overlay.remove();
@@ -645,9 +649,9 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
         await this.app.vault.modify(file, nextContent);
       }
 
-      new Notice(mode === "append"
+      new Notice(`${mode === "append"
         ? "Chinese translation appended below the current file."
-        : "Chinese translation inserted after each paragraph.");
+        : "Chinese translation inserted after each paragraph."}${this.tokenUsageSuffix()}`, 12000);
     } catch (error) {
       new Notice(`Translation failed: ${getErrorMessage(error)}`);
       console.error("File translation failed", error);
@@ -732,7 +736,7 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
       : failures.length === 0
         ? `Batch translation complete: ${changedCount}/${files.length} files updated.`
         : `Batch translation finished: ${changedCount}/${files.length} files updated, ${failures.length} failed.`;
-    new Notice(summary, stopped || failures.length > 0 ? 9000 : 5000);
+    new Notice(`${summary}${this.tokenUsageSuffix()}`, stopped || failures.length > 0 ? 12000 : 9000);
     window.clearInterval(timerInterval);
     overlay.remove();
     this.setStatus("");
@@ -882,11 +886,15 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
       try {
         const parsed = JSON.parse(result.stdout) as ClaudeJsonResult;
         if (parsed.usage) {
-          // Only count fresh input + cache_creation (not cache_read which is near-free on plan).
-          this.sessionTokens.input += (parsed.usage.input_tokens ?? 0)
-            + (parsed.usage.cache_creation_input_tokens ?? 0);
-          this.sessionTokens.output += parsed.usage.output_tokens ?? 0;
-          this.onTokensUpdate?.({ ...this.sessionTokens });
+          const cachedInput = parsed.usage.cache_read_input_tokens ?? 0;
+          this.recordTokenUsage({
+            cachedInput,
+            input: (parsed.usage.input_tokens ?? 0)
+              + (parsed.usage.cache_creation_input_tokens ?? 0)
+              + cachedInput,
+            output: parsed.usage.output_tokens ?? 0,
+            reasoningOutput: 0
+          });
         }
         return parsed.result ?? result.stdout;
       } catch {
@@ -912,6 +920,7 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
           "--skip-git-repo-check",
           "--color",
           "never",
+          "--json",
           "--disable",
           "plugins",
           "--disable",
@@ -950,6 +959,11 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
           throw new Error(compactProcessError(result.stderr || result.stdout));
         }
 
+        const codexUsage = parseCodexJsonUsage(result.stdout);
+        if (codexUsage) {
+          this.recordTokenUsage(codexUsage);
+        }
+
         return await readFile(outputPath, "utf8");
       } finally {
         this.currentKills.delete(handle.kill);
@@ -968,8 +982,22 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
 
   private startOperation(onTokensUpdate?: (tokens: TokenUsage) => void) {
     this.operationCancelled = false;
-    this.sessionTokens = { input: 0, output: 0 };
+    this.sessionTokens = createEmptyTokenUsage();
     this.onTokensUpdate = onTokensUpdate;
+  }
+
+  private recordTokenUsage(delta: TokenUsage) {
+    this.sessionTokens = addTokenUsage(this.sessionTokens, delta);
+    this.onTokensUpdate?.({ ...this.sessionTokens });
+  }
+
+  private getCurrentTokenUsage(): TokenUsage {
+    return { ...this.sessionTokens };
+  }
+
+  private tokenUsageSuffix(): string {
+    const usage = this.getCurrentTokenUsage();
+    return hasTokenUsage(usage) ? ` Token usage: ${formatTokenUsage(usage)}.` : "";
   }
 
   private get isCancelled() {
@@ -1269,8 +1297,7 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
         ?.createSpan({ cls: "codex-translator-popup-tokens" }) ?? null;
     }
     if (tokensEl) {
-      const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
-      tokensEl.setText(`${fmt(tokens.input)}↑ ${fmt(tokens.output)}↓`);
+      tokensEl.setText(formatTokenUsageCompact(tokens));
     }
   }
 
@@ -1327,6 +1354,11 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
       status.setText(`${this.getBackendLabel()} 正在结合上下文解释…`);
     }
 
+    if (card.tokenUsage && hasTokenUsage(card.tokenUsage)) {
+      const usageEl = body.createDiv("codex-local-translator-usage");
+      usageEl.setText(`Token usage: ${formatTokenUsage(card.tokenUsage)}`);
+    }
+
     popup.appendChild(body);
 
     const actions = document.createElement("div");
@@ -1364,7 +1396,13 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
     this.positionPopup(rect);
   }
 
-  private showPopup(text: string, sourceText: string, rect: DOMRect, state: "loading" | "done" | "error") {
+  private showPopup(
+    text: string,
+    sourceText: string,
+    rect: DOMRect,
+    state: "loading" | "done" | "error",
+    tokenUsage?: TokenUsage
+  ) {
     const popup = this.ensurePopup();
     popup.empty();
     popup.classList.toggle("is-loading", state === "loading");
@@ -1374,6 +1412,13 @@ export default class CodexLocalTranslatorPlugin extends Plugin {
     body.className = "codex-local-translator-body";
     body.setText(text);
     popup.appendChild(body);
+
+    if (tokenUsage && hasTokenUsage(tokenUsage)) {
+      const usageEl = document.createElement("div");
+      usageEl.className = "codex-local-translator-usage";
+      usageEl.setText(`Token usage: ${formatTokenUsage(tokenUsage)}`);
+      popup.appendChild(usageEl);
+    }
 
     const actions = document.createElement("div");
     actions.className = "codex-local-translator-actions";
@@ -1528,9 +1573,7 @@ class TranslationProgressOverlay {
   }
 
   setTokens(tokens: TokenUsage) {
-    const total = tokens.input + tokens.output;
-    const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
-    this.tokensEl.setText(`${fmt(tokens.input)}↑ ${fmt(tokens.output)}↓ (${fmt(total)} total)`);
+    this.tokensEl.setText(formatTokenUsageCompact(tokens));
   }
 
   appendChunk(chunk: string) {
@@ -2535,6 +2578,91 @@ function compactProcessError(output: string): string {
     .filter(Boolean);
 
   return lines.slice(-4).join(" ") || "Unknown Codex error.";
+}
+
+function parseCodexJsonUsage(output: string): TokenUsage | null {
+  let usage: TokenUsage | null = null;
+
+  for (const line of output.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) continue;
+
+    try {
+      const event = JSON.parse(trimmed) as {
+        type?: string;
+        usage?: {
+          cached_input_tokens?: number;
+          input_tokens?: number;
+          output_tokens?: number;
+          reasoning_output_tokens?: number;
+        };
+      };
+
+      if (event.type === "turn.completed" && event.usage) {
+        usage = {
+          cachedInput: event.usage.cached_input_tokens ?? 0,
+          input: event.usage.input_tokens ?? 0,
+          output: event.usage.output_tokens ?? 0,
+          reasoningOutput: event.usage.reasoning_output_tokens ?? 0
+        };
+      }
+    } catch {
+      // Ignore non-event output lines.
+    }
+  }
+
+  return usage;
+}
+
+function createEmptyTokenUsage(): TokenUsage {
+  return {
+    cachedInput: 0,
+    input: 0,
+    output: 0,
+    reasoningOutput: 0
+  };
+}
+
+function addTokenUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
+  return {
+    cachedInput: left.cachedInput + right.cachedInput,
+    input: left.input + right.input,
+    output: left.output + right.output,
+    reasoningOutput: left.reasoningOutput + right.reasoningOutput
+  };
+}
+
+function hasTokenUsage(tokens: TokenUsage): boolean {
+  return tokens.input > 0 || tokens.output > 0 || tokens.cachedInput > 0 || tokens.reasoningOutput > 0;
+}
+
+function formatTokenUsage(tokens: TokenUsage): string {
+  const parts = [
+    `input ${formatTokenCount(tokens.input)}`,
+    `output ${formatTokenCount(tokens.output)}`
+  ];
+
+  if (tokens.cachedInput > 0) {
+    parts.splice(1, 0, `cached ${formatTokenCount(tokens.cachedInput)}`);
+  }
+
+  if (tokens.reasoningOutput > 0) {
+    parts.push(`reasoning ${formatTokenCount(tokens.reasoningOutput)}`);
+  }
+
+  parts.push(`total ${formatTokenCount(tokens.input + tokens.output)}`);
+  return parts.join(", ");
+}
+
+function formatTokenUsageCompact(tokens: TokenUsage): string {
+  const total = tokens.input + tokens.output;
+  const cached = tokens.cachedInput > 0 ? `, ${formatTokenCount(tokens.cachedInput)} cached` : "";
+  const reasoning = tokens.reasoningOutput > 0 ? `, ${formatTokenCount(tokens.reasoningOutput)} reasoning` : "";
+  return `${formatTokenCount(tokens.input)}↑ ${formatTokenCount(tokens.output)}↓ (${formatTokenCount(total)} total${cached}${reasoning})`;
+}
+
+function formatTokenCount(value: number): string {
+  return value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value);
 }
 
 function getErrorMessage(error: unknown): string {

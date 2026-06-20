@@ -17,6 +17,7 @@ Translate selected text, whole notes, or batches of Markdown files in Obsidian t
 - Translate the current Markdown file into interleaved English/Chinese paragraphs.
 - Batch translate multiple Markdown files by file path, folder path, or wildcard.
 - Use Codex or Claude Code without API keys.
+- Show actual token usage after AI-powered translation or vocabulary explanation when the local backend reports it.
 - Use a custom prompt/context for book, domain, terminology, or style guidance.
 
 ## Requirements
