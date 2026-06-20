@@ -17,6 +17,7 @@ This is an unofficial community plugin. It is not affiliated with OpenAI, Anthro
 - Translate the current Markdown file and append the Chinese translation below the original.
 - Translate the current Markdown file into interleaved English/Chinese paragraphs.
 - Batch translate multiple Markdown files by file path, folder path, or wildcard.
+- Reduce token overhead on long chapters by merging consecutive short prose paragraphs into larger translation units.
 - Show token usage after AI calls when the selected backend reports usage.
 - Add custom reading context, terminology, and translation style instructions.
 
@@ -42,8 +43,8 @@ Recommended basic settings:
 - `Require Command key for auto translate`: keep enabled so normal text selection does not trigger translation.
 - `Custom prompt / context`: add the book, domain, terminology, and tone you want the AI to respect.
 - `Timeout`: increase this for long full-file or batch translation.
-- `Single-shot translation limit`: smaller notes are translated in one request for better context.
-- `Batch chunk size`: larger chunks reduce process startup overhead and repeated prompt tokens.
+- `Single-shot translation limit`: smaller notes are translated in one request for better context. Defaults to `60000` characters.
+- `Batch chunk size`: larger chunks reduce process startup overhead and repeated prompt tokens. Defaults to `30000` characters.
 
 Local backend settings:
 
@@ -91,6 +92,8 @@ Current-file translation:
 1. Open a Markdown file.
 2. Run `Command Palette -> Translate current Markdown file: append Chinese below`.
 3. Or run `Command Palette -> Translate current Markdown file: interleave Chinese paragraphs`.
+
+For long chapters with many tiny EPUB/OCR paragraphs, the plugin automatically merges consecutive short prose paragraphs into larger translation units before sending them to AI. The original English text is preserved, but the Chinese translation may be inserted after a small group of related short paragraphs instead of after every tiny fragment. This greatly reduces repeated prompt and delimiter tokens.
 
 Batch translation:
 

@@ -56,7 +56,7 @@ interface ContextualAIReaderSettings {
 const DEFAULT_SETTINGS: ContextualAIReaderSettings = {
   aiBackend: "auto",
   autoTranslate: true,
-  batchChunkChars: 10000,
+  batchChunkChars: 30000,
   claudeCommand: "",
   claudeModel: "claude-sonnet-4-5",
   codexCommand: "",
@@ -74,7 +74,7 @@ const DEFAULT_SETTINGS: ContextualAIReaderSettings = {
   anthropicBaseUrl: "https://api.anthropic.com/v1",
   anthropicModel: "claude-sonnet-4-5",
   reasoningEffort: "none",
-  singleShotMaxChars: 30000,
+  singleShotMaxChars: 60000,
   requireCommandForAutoTranslate: true,
   speechLanguage: "en-US",
   speechRate: 0.92,
@@ -136,10 +136,16 @@ interface MarkdownBlock {
 }
 
 interface MarkdownBlockBatch {
-  blocks: MarkdownBlock[];
   charCount: number;
+  endUnit: number;
+  startUnit: number;
+  units: TranslationUnit[];
+}
+
+interface TranslationUnit {
   endBlock: number;
   startBlock: number;
+  text: string;
 }
 
 interface ClaudeJsonResult {
@@ -686,7 +692,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
       const nextContent = mode === "append"
         ? appendDocumentTranslation(sourceText, translatedContent.fullText)
-        : interleaveDocumentTranslation(sourceText, translatedContent.blocks, translatedContent.translations);
+        : interleaveDocumentTranslation(sourceText, translatedContent.blocks, translatedContent.units, translatedContent.translations);
 
       const currentView = this.app.workspace.getActiveViewOfType(MarkdownView);
       const currentContent = currentView?.file?.path === file.path
@@ -768,7 +774,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
         const nextContent = mode === "append"
           ? appendDocumentTranslation(sourceText, translatedContent.fullText)
-          : interleaveDocumentTranslation(sourceText, translatedContent.blocks, translatedContent.translations);
+          : interleaveDocumentTranslation(sourceText, translatedContent.blocks, translatedContent.units, translatedContent.translations);
 
         const currentContent = await this.app.vault.read(file);
 
@@ -1167,53 +1173,57 @@ export default class ContextualAIReaderPlugin extends Plugin {
     sourceText: string,
     overlay: TranslationProgressOverlay,
     progressLabel: string
-  ): Promise<{ blocks: MarkdownBlock[]; fullText: string; translations: string[] }> {
+  ): Promise<{ blocks: MarkdownBlock[]; fullText: string; translations: string[]; units: TranslationUnit[] }> {
     const backendLabel = this.getBackendLabel();
     const { body } = extractFrontmatter(sourceText);
     const blocks = splitMarkdownBlocks(body);
+    const units = buildTranslationUnits(blocks);
 
     if (blocks.length === 0) {
-      return { blocks, fullText: "", translations: [] };
+      return { blocks, fullText: "", translations: [], units: [] };
     }
 
     const totalChars = blocks.reduce((sum, b) => sum + b.text.length, 0);
     overlay.setDetail([
-      `${blocks.length} paragraphs · ${formatCharacterCount(totalChars)} characters`,
+      `${blocks.length} paragraphs · ${units.length} translation units · ${formatCharacterCount(totalChars)} characters`,
       previewBlockText(blocks[0]?.text ?? "")
     ].filter(Boolean).join("\n\n"));
-    const useSingleShot = totalChars <= this.settings.singleShotMaxChars;
+    const effectiveSingleShotMaxChars = Math.max(this.settings.singleShotMaxChars, DEFAULT_SETTINGS.singleShotMaxChars);
+    const effectiveBatchChunkChars = Math.max(this.settings.batchChunkChars, DEFAULT_SETTINGS.batchChunkChars);
+    const useSingleShot = totalChars <= effectiveSingleShotMaxChars;
 
     let translations: string[];
 
     if (useSingleShot) {
       // Small file: single AI call
       const onChunk = (chunk: string) => overlay.appendChunk(chunk);
-      overlay.setStatus(`${progressLabel} · 0/${blocks.length} paragraphs · single request`);
-      this.setStatus(`${backendLabel} ${progressLabel} 0/${blocks.length}`);
-      translations = await this.translateBlockBatch(blocks.map((b) => b.text), onChunk);
+      overlay.setStatus(`${progressLabel} · 0/${units.length} units · single request`);
+      this.setStatus(`${backendLabel} ${progressLabel} 0/${units.length}`);
+      translations = await this.translateBlockBatch(units.map((unit) => unit.text), onChunk);
       if (this.isCancelled) throw new Error("Translation stopped.");
-      overlay.setStatus(`${progressLabel} · ${blocks.length}/${blocks.length} paragraphs · inserting`);
+      overlay.setStatus(`${progressLabel} · ${units.length}/${units.length} units · inserting`);
     } else {
       // Large file: parallel AI batches (3 concurrent)
-      const batches = buildBlockBatches(blocks, this.settings.batchChunkChars);
+      const batches = buildBlockBatches(units, effectiveBatchChunkChars);
       const results = new Array<string[]>(batches.length);
       let completed = 0;
+      let completedUnits = 0;
       let completedParagraphs = 0;
       const CONCURRENCY = 3;
 
       let inFlight = 0;
       const updateStatus = (activeBatch?: MarkdownBlockBatch) => {
         const label = inFlight > 0
-          ? `${progressLabel} · batch ${completed}/${batches.length} done · ${completedParagraphs}/${blocks.length} paragraphs · ${inFlight} running`
-          : `${progressLabel} · batch ${completed}/${batches.length} done · ${completedParagraphs}/${blocks.length} paragraphs`;
+          ? `${progressLabel} · batch ${completed}/${batches.length} done · ${completedUnits}/${units.length} units · ${completedParagraphs}/${blocks.length} paragraphs · ${inFlight} running`
+          : `${progressLabel} · batch ${completed}/${batches.length} done · ${completedUnits}/${units.length} units · ${completedParagraphs}/${blocks.length} paragraphs`;
         overlay.setStatus(label);
         if (activeBatch) {
           overlay.setDetail([
-            `Current batch: paragraphs ${activeBatch.startBlock + 1}-${activeBatch.endBlock} · ${formatCharacterCount(activeBatch.charCount)} chars`,
-            previewBlockText(activeBatch.blocks[0]?.text ?? "")
+            `Current batch: units ${activeBatch.startUnit + 1}-${activeBatch.endUnit} · ${formatCharacterCount(activeBatch.charCount)} chars`,
+            previewBlockText(activeBatch.units[0]?.text ?? "")
           ].filter(Boolean).join("\n\n"));
         }
-        this.setStatus(`${backendLabel} ${completed}/${batches.length} batches · ${completedParagraphs}/${blocks.length} paragraphs`);
+        this.setStatus(`${backendLabel} ${completed}/${batches.length} batches · ${completedUnits}/${units.length} units`);
       };
 
       const queue = batches.map((batch, i) => ({ batch, i }));
@@ -1223,10 +1233,11 @@ export default class ContextualAIReaderPlugin extends Plugin {
           if (!item) break;
           inFlight++;
           updateStatus(item.batch);
-          results[item.i] = await this.translateBlockBatch(item.batch.blocks.map((b) => b.text));
+          results[item.i] = await this.translateBlockBatch(item.batch.units.map((unit) => unit.text));
           inFlight--;
           completed++;
-          completedParagraphs += item.batch.blocks.length;
+          completedUnits += item.batch.units.length;
+          completedParagraphs += item.batch.units.reduce((sum, unit) => sum + unit.endBlock - unit.startBlock, 0);
           updateStatus(item.batch);
         }
       });
@@ -1238,8 +1249,9 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     return {
       blocks,
-      fullText: joinTranslatedBlocks(blocks, translations),
-      translations
+      fullText: joinTranslatedBlocks(units, translations),
+      translations,
+      units
     };
   }
 
@@ -2219,10 +2231,10 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Single-shot translation limit (characters)")
-      .setDesc("Documents under this length are sent to the AI in one request for better quality. Longer documents fall back to batch mode.")
+      .setDesc("Documents under this length are sent to the AI in one request for better context. Saved lower values are treated as at least 60000.")
       .addText((text) =>
         text
-          .setPlaceholder("30000")
+          .setPlaceholder("60000")
           .setValue(String(this.plugin.settings.singleShotMaxChars))
           .onChange(async (value) => {
             const parsed = Number.parseInt(value, 10);
@@ -2235,10 +2247,10 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Batch chunk size (characters)")
-      .setDesc("When falling back to batch mode, how many characters per chunk.")
+      .setDesc("When falling back to batch mode, how many characters per chunk. Saved lower values are treated as at least 30000.")
       .addText((text) =>
         text
-          .setPlaceholder("10000")
+          .setPlaceholder("30000")
           .setValue(String(this.plugin.settings.batchChunkChars))
           .onChange(async (value) => {
             const parsed = Number.parseInt(value, 10);
@@ -2561,46 +2573,42 @@ function escapeRegExp(value: string): string {
 }
 
 const BLOCK_SEP = "§§§BLOCK§§§";
+const SHORT_PROSE_UNIT_TARGET_CHARS = 1200;
+const SHORT_PROSE_UNIT_MAX_CHARS = 1800;
 
 function buildBlockTranslationPrompt(blockTexts: string[], customPrompt: string): string {
   const numberedBlocks = blockTexts
-    .map((text, i) => `[${i + 1}]\n${text}`)
+    .map((text, i) => `#${i + 1}\n${text}`)
     .join(`\n${BLOCK_SEP}\n`);
 
   return [
-    "You are a precise Markdown translation engine.",
-    "Translate each numbered block below to Simplified Chinese.",
+    "Translate each block to Simplified Chinese.",
     customPrompt.trim()
-      ? `User custom context and preferences:\n${customPrompt.trim()}`
-      : "User custom context and preferences: none.",
+      ? `Context:\n${customPrompt.trim()}`
+      : "",
     "",
-    "Rules:",
-    `- Output ONLY the translations, separated by the delimiter line: ${BLOCK_SEP}`,
-    "- Preserve the exact count and order of blocks.",
-    "- Do not output the block numbers.",
-    "- Preserve Markdown structure, headings, lists, tables, links, inline code, and code fences.",
-    "- Do not translate code, commands, file paths, URLs, package names, or identifiers.",
-    "- Do not add explanations, labels, or surrounding prose.",
+    `Return only translations in the same order, separated by this exact line: ${BLOCK_SEP}`,
+    "Keep Markdown. Do not translate code, commands, paths, URLs, package names, identifiers, or placeholders. No labels or explanations.",
     "",
     "Blocks:",
     numberedBlocks
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function parseTranslationArray(rawResult: string, expectedLength: number): string[] {
   const parts = rawResult
     .split(BLOCK_SEP)
-    .map((s) => s.replace(/^\s*\[\d+\]\s*/m, "").trim());
+    .map((s) => s.replace(/^\s*(?:\[\d+\]|#\d+)\s*/m, "").trim());
 
   if (parts.length === expectedLength) {
     return parts;
   }
 
   // Fallback: try to strip any leading/trailing fluff and re-split
-  const trimmed = rawResult.trim().replace(/^.*?(?=§§§BLOCK§§§|\[1\])/s, "");
+  const trimmed = rawResult.trim().replace(/^.*?(?=§§§BLOCK§§§|\[1\]|#1)/s, "");
   const parts2 = trimmed
     .split(BLOCK_SEP)
-    .map((s) => s.replace(/^\s*\[\d+\]\s*/m, "").trim())
+    .map((s) => s.replace(/^\s*(?:\[\d+\]|#\d+)\s*/m, "").trim())
     .filter((s) => s.length > 0);
 
   if (parts2.length === expectedLength) {
@@ -2617,68 +2625,147 @@ function appendDocumentTranslation(sourceText: string, translatedText: string): 
 function interleaveDocumentTranslation(
   sourceText: string,
   blocks: MarkdownBlock[],
+  units: TranslationUnit[],
   translations: string[]
 ): string {
   const { frontmatter } = extractFrontmatter(sourceText);
-  const body = blocks
-    .map((block, index) => {
-      const translation = translations[index]?.trim();
+  let body = "";
+  let cursor = 0;
 
-      if (!translation) {
-        return `${block.text.trimEnd()}${block.separator}`;
-      }
+  for (let index = 0; index < units.length; index++) {
+    const unit = units[index];
+    const translation = translations[index]?.trim();
 
-      return `${block.text.trimEnd()}\n\n${translation}${block.separator}`;
-    })
-    .join("")
-    .trimEnd();
+    while (cursor < unit.endBlock) {
+      const block = blocks[cursor];
+      body += `${block.text.trimEnd()}${block.separator}`;
+      cursor++;
+    }
 
-  return `${frontmatter ? `${frontmatter.trimEnd()}\n\n` : ""}${body}\n`;
+    if (translation) {
+      body = `${body.trimEnd()}\n\n${translation}${blocks[unit.endBlock - 1]?.separator ?? "\n\n"}`;
+    }
+  }
+
+  while (cursor < blocks.length) {
+    const block = blocks[cursor];
+    body += `${block.text.trimEnd()}${block.separator}`;
+    cursor++;
+  }
+
+  return `${frontmatter ? `${frontmatter.trimEnd()}\n\n` : ""}${body.trimEnd()}\n`;
 }
 
-function joinTranslatedBlocks(blocks: MarkdownBlock[], translations: string[]): string {
-  return blocks
-    .map((block, index) => `${translations[index]?.trimEnd() ?? ""}${block.separator}`)
+function joinTranslatedBlocks(units: TranslationUnit[], translations: string[]): string {
+  return units
+    .map((unit, index) => `${translations[index]?.trimEnd() ?? ""}${getUnitTrailingSeparator(unit)}`)
     .join("")
     .trimEnd();
 }
 
-function buildBlockBatches(blocks: MarkdownBlock[], maxCharacters: number): MarkdownBlockBatch[] {
+function buildBlockBatches(units: TranslationUnit[], maxCharacters: number): MarkdownBlockBatch[] {
   const batches: MarkdownBlockBatch[] = [];
-  let currentBatch: MarkdownBlock[] = [];
+  let currentBatch: TranslationUnit[] = [];
   let currentSize = 0;
-  let startBlock = 0;
+  let startUnit = 0;
 
-  for (let index = 0; index < blocks.length; index++) {
-    const block = blocks[index];
-    const blockSize = block.text.length;
+  for (let index = 0; index < units.length; index++) {
+    const unit = units[index];
+    const unitSize = unit.text.length;
 
-    if (currentBatch.length > 0 && currentSize + blockSize > maxCharacters) {
+    if (currentBatch.length > 0 && currentSize + unitSize > maxCharacters) {
       batches.push({
-        blocks: currentBatch,
         charCount: currentSize,
-        endBlock: index,
-        startBlock
+        endUnit: index,
+        startUnit,
+        units: currentBatch
       });
       currentBatch = [];
       currentSize = 0;
-      startBlock = index;
+      startUnit = index;
     }
 
-    currentBatch.push(block);
-    currentSize += blockSize;
+    currentBatch.push(unit);
+    currentSize += unitSize;
   }
 
   if (currentBatch.length > 0) {
     batches.push({
-      blocks: currentBatch,
       charCount: currentSize,
-      endBlock: blocks.length,
-      startBlock
+      endUnit: units.length,
+      startUnit,
+      units: currentBatch
     });
   }
 
   return batches;
+}
+
+function buildTranslationUnits(blocks: MarkdownBlock[]): TranslationUnit[] {
+  const units: TranslationUnit[] = [];
+  let pendingStart = -1;
+  let pendingText = "";
+
+  const flush = (endBlock: number) => {
+    if (pendingStart < 0) return;
+    units.push({
+      startBlock: pendingStart,
+      endBlock,
+      text: pendingText.trimEnd()
+    });
+    pendingStart = -1;
+    pendingText = "";
+  };
+
+  for (let index = 0; index < blocks.length; index++) {
+    const block = blocks[index];
+    const mergeable = isMergeableProseBlock(block);
+    const nextSize = pendingText.length + block.text.length + block.separator.length;
+
+    if (
+      !mergeable ||
+      (pendingStart >= 0 && pendingText.length >= SHORT_PROSE_UNIT_TARGET_CHARS) ||
+      (pendingStart >= 0 && nextSize > SHORT_PROSE_UNIT_MAX_CHARS)
+    ) {
+      flush(index);
+    }
+
+    if (!mergeable) {
+      units.push({
+        startBlock: index,
+        endBlock: index + 1,
+        text: block.text.trimEnd()
+      });
+      continue;
+    }
+
+    if (pendingStart < 0) {
+      pendingStart = index;
+    }
+
+    pendingText += `${block.text.trimEnd()}${block.separator || "\n\n"}`;
+  }
+
+  flush(blocks.length);
+  return units;
+}
+
+function isMergeableProseBlock(block: MarkdownBlock): boolean {
+  const text = block.text.trim();
+
+  if (!text) return false;
+  if (/^(```|~~~)/.test(text)) return false;
+  if (/^#{1,6}\s/.test(text)) return false;
+  if (/^>\s?/.test(text)) return false;
+  if (/^([-*+]|\d+[.)])\s+/.test(text)) return false;
+  if (/^\|.*\|$/.test(text)) return false;
+  if (/^<\w+[\s>]/.test(text)) return false;
+
+  return true;
+}
+
+function getUnitTrailingSeparator(unit: TranslationUnit): string {
+  return unit.text.endsWith("\n") ? "" : "\n\n";
 }
 
 function extractFrontmatter(sourceText: string): { body: string; frontmatter: string } {
