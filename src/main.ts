@@ -29,6 +29,11 @@ type AIBackend = "auto" | "codex" | "claude";
 
 const YOUTUBE_PLAYER_VIEW_TYPE = "contextual-ai-reader-youtube-player";
 const YOUTUBE_INTERNAL_LINK_HASH = "contextual-ai-reader-youtube";
+const YOUTUBE_TRANSCRIPT_MIN_LINES_PER_BLOCK = 3;
+const YOUTUBE_TRANSCRIPT_MAX_LINES_PER_BLOCK = 7;
+const YOUTUBE_TRANSCRIPT_MIN_CHARS_PER_BLOCK = 80;
+const YOUTUBE_TRANSCRIPT_MAX_CHARS_PER_BLOCK = 300;
+const YOUTUBE_TRANSCRIPT_MAX_SECONDS_PER_BLOCK = 24;
 const INNERTUBE_API_KEY = ["AI", "za", "Sy", "AO", "_FJ2SlqU8Q4STEHLGCi", "lw_Y9_11qcW8"].join("");
 const INNERTUBE_PLAYER_URL = `https://www.youtube.com/youtubei/v1/player?key=${INNERTUBE_API_KEY}`;
 const INNERTUBE_IOS_USER_AGENT = "com.google.ios.youtube/20.10.38 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)";
@@ -1369,7 +1374,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
       await this.ensureParentFolders(path);
       const file = await this.app.vault.create(path, formatYouTubeTranscriptNote(transcript));
       await this.openExcerptFile(file);
-      new Notice(`YouTube subtitles extracted: ${transcript.entries.length} lines.`);
+      new Notice(`YouTube transcript extracted: ${groupYouTubeTranscriptEntries(transcript.entries).length} blocks from ${transcript.entries.length} caption lines.`);
     } catch (error) {
       new Notice(`Could not extract YouTube subtitles: ${getErrorMessage(error)}`, 9000);
       console.error("Could not extract YouTube subtitles", error);
@@ -3468,7 +3473,7 @@ function parseYouTubeTranscriptJson(jsonText: string): YouTubeTranscriptEntry[] 
     .map((event) => ({
       duration: (event.dDurationMs ?? 0) / 1000,
       start: (event.tStartMs ?? 0) / 1000,
-      text: normalizeWhitespace((event.segs ?? []).map((seg) => seg.utf8 ?? "").join(""))
+      text: normalizeWhitespace(decodeHtmlEntities((event.segs ?? []).map((seg) => seg.utf8 ?? "").join("")))
     }))
     .filter((entry) => entry.text);
 }
@@ -3485,7 +3490,7 @@ function parseYouTubeTranscriptXml(xml: string): YouTubeTranscriptEntry[] {
     .map((node) => ({
       duration: Number.parseFloat(node.getAttribute("dur") ?? "0"),
       start: Number.parseFloat(node.getAttribute("start") ?? "0"),
-      text: normalizeWhitespace(node.textContent ?? "")
+      text: normalizeWhitespace(decodeHtmlEntities(node.textContent ?? ""))
     }))
     .filter((entry) => entry.text);
 
@@ -3497,7 +3502,7 @@ function parseYouTubeTranscriptXml(xml: string): YouTubeTranscriptEntry[] {
     .map((node) => ({
       duration: Number.parseFloat(node.getAttribute("d") ?? "0") / 1000,
       start: Number.parseFloat(node.getAttribute("t") ?? "0") / 1000,
-      text: normalizeWhitespace(node.textContent ?? "")
+      text: normalizeWhitespace(decodeHtmlEntities(node.textContent ?? ""))
     }))
     .filter((entry) => entry.text);
 }
@@ -3519,7 +3524,7 @@ function parseYouTubeTranscriptVtt(vtt: string): YouTubeTranscriptEntry[] {
     const [startRaw, endRaw] = timingLine.split("-->").map((part) => part.trim().split(/\s+/)[0]);
     const start = parseVttTimestamp(startRaw);
     const end = parseVttTimestamp(endRaw);
-    const text = normalizeWhitespace(lines.slice(timingIndex + 1).join(" ").replace(/<[^>]+>/g, ""));
+    const text = normalizeWhitespace(decodeHtmlEntities(lines.slice(timingIndex + 1).join(" ").replace(/<[^>]+>/g, "")));
 
     if (text) {
       entries.push({
@@ -3536,7 +3541,7 @@ function parseYouTubeTranscriptVtt(vtt: string): YouTubeTranscriptEntry[] {
 function parseLooseSubtitleText(text: string): YouTubeTranscriptEntry[] {
   const lines = text
     .split(/\r?\n/)
-    .map((line) => normalizeWhitespace(line.replace(/<[^>]+>/g, "")))
+    .map((line) => normalizeWhitespace(decodeHtmlEntities(line.replace(/<[^>]+>/g, ""))))
     .filter(Boolean)
     .filter((line) => !/^(WEBVTT|Kind:|Language:)/i.test(line));
 
@@ -3564,22 +3569,108 @@ function parseVttTimestamp(value: string): number {
 
 function formatYouTubeTranscriptNote(transcript: YouTubeTranscript): string {
   const sourceUrl = `https://www.youtube.com/watch?v=${transcript.videoId}`;
+  const blocks = groupYouTubeTranscriptEntries(transcript.entries);
   const lines = [
     `# ${transcript.title}`,
     "",
     `Source: ${sourceUrl}`,
+    `Blocks: ${blocks.length} · Caption lines: ${transcript.entries.length}`,
     "",
     "## Transcript",
     ""
   ];
 
-  for (const entry of transcript.entries) {
-    const timestamp = formatTimestamp(entry.start);
-    const seekUrl = buildYouTubeInternalSeekLink(transcript.videoId, entry.start);
-    lines.push(`- [${timestamp}](${seekUrl}) ${entry.text}`);
+  for (const block of blocks) {
+    const timestamp = formatTimestamp(block.start);
+    const seekUrl = buildYouTubeInternalSeekLink(transcript.videoId, block.start);
+    lines.push(`- [${timestamp}](${seekUrl}) ${block.text}`);
   }
 
   return `${lines.join("\n")}\n`;
+}
+
+function groupYouTubeTranscriptEntries(entries: YouTubeTranscriptEntry[]): YouTubeTranscriptEntry[] {
+  const blocks: YouTubeTranscriptEntry[] = [];
+  let currentStart = 0;
+  let currentDuration = 0;
+  let currentTexts: string[] = [];
+  let currentLines = 0;
+
+  const flush = () => {
+    const text = normalizeTranscriptBlockText(currentTexts);
+    if (text) {
+      blocks.push({
+        duration: currentDuration,
+        start: currentStart,
+        text
+      });
+    }
+    currentStart = 0;
+    currentDuration = 0;
+    currentTexts = [];
+    currentLines = 0;
+  };
+
+  for (const entry of entries) {
+    const text = normalizeWhitespace(decodeHtmlEntities(entry.text));
+    if (!text) continue;
+
+    if (currentLines === 0) {
+      currentStart = entry.start;
+    }
+
+    currentTexts.push(text);
+    currentLines += 1;
+    currentDuration = Math.max(currentDuration, (entry.start + entry.duration) - currentStart);
+
+    const blockText = normalizeTranscriptBlockText(currentTexts);
+    const hasNaturalEnding = /(?:[.!?。！？]|[.!?]["'”’)\]]+)$/.test(blockText);
+    const isNaturalSentenceBlock = hasNaturalEnding
+      && currentLines >= YOUTUBE_TRANSCRIPT_MIN_LINES_PER_BLOCK
+      && blockText.length >= YOUTUBE_TRANSCRIPT_MIN_CHARS_PER_BLOCK;
+    const isTooLarge = currentLines >= YOUTUBE_TRANSCRIPT_MAX_LINES_PER_BLOCK
+      || blockText.length >= YOUTUBE_TRANSCRIPT_MAX_CHARS_PER_BLOCK
+      || currentDuration >= YOUTUBE_TRANSCRIPT_MAX_SECONDS_PER_BLOCK;
+
+    if (isNaturalSentenceBlock || isTooLarge) {
+      flush();
+    }
+  }
+
+  if (currentLines > 0) {
+    flush();
+  }
+
+  return blocks;
+}
+
+function normalizeTranscriptBlockText(parts: string[]): string {
+  return normalizeWhitespace(parts.join(" "))
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/\s+([’'])\s*/g, "$1")
+    .trim();
+}
+
+function decodeHtmlEntities(text: string): string {
+  const named: Record<string, string> = {
+    amp: "&",
+    apos: "'",
+    gt: ">",
+    lt: "<",
+    nbsp: " ",
+    quot: "\""
+  };
+
+  return text
+    .replace(/&#(\d+);/g, (_, value: string) => {
+      const codePoint = Number.parseInt(value, 10);
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : _;
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, value: string) => {
+      const codePoint = Number.parseInt(value, 16);
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : _;
+    })
+    .replace(/&([a-z]+);/gi, (match, name: string) => named[name.toLowerCase()] ?? match);
 }
 
 function buildYouTubeInternalSeekLink(videoId: string, start: number): string {
