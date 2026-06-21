@@ -203,6 +203,21 @@ Set `Excerpt file` in plugin settings. When you click Book plus or run `Save sel
 
 Excerpt entries can include the original text, popup translation, vocabulary note, source note path, and line references when available.
 
+Vocabulary entries stay in the same main excerpt file, but each vocabulary card includes reusable inline metadata fields:
+
+```text
+- type:: vocabulary
+- term:: private
+- status:: new
+- source_language:: en
+- target_language:: ja
+- created:: 2026-06-21
+- source:: [[Books/Test Chapter.md]]
+- tags:: #vocabulary #language/ja #status/new
+```
+
+This keeps the notebook simple while still allowing Obsidian search, tags, and Dataview-style filtering by language, status, source note, or topic.
+
 ## Token Usage And Cancellation
 
 AI-powered actions show token usage when the selected backend reports it.

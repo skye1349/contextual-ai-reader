@@ -230,6 +230,21 @@ Books/Trading in the Zone/**/*.md
 
 摘抄条目可以包含原文、弹窗翻译、单词解释、来源文件和行号引用。
 
+生词条目仍然保存在同一个主生词本里，但每个生词卡片会带可复用的 inline metadata：
+
+```text
+- type:: vocabulary
+- term:: private
+- status:: new
+- source_language:: en
+- target_language:: ja
+- created:: 2026-06-21
+- source:: [[Books/Test Chapter.md]]
+- tags:: #vocabulary #language/ja #status/new
+```
+
+这样不需要一开始拆很多文件，也可以用 Obsidian 搜索、tag 或 Dataview 按语言、状态、来源笔记、主题来过滤。
+
 ## Token Usage 怎么看
 
 当 AI 后端返回 token usage 时，插件会显示类似：

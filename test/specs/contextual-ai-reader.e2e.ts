@@ -76,4 +76,33 @@ describe("Contextual AI Reader in Obsidian", function () {
     expect(result.afterFirstOpen).toBe(1);
     expect(result.afterSecondOpen).toBe(1);
   });
+
+  it("formats vocabulary notes with reusable metadata fields", async function () {
+    const note = await browser.executeObsidian(({ app }) => {
+      const plugin = app.plugins.plugins["contextual-ai-reader"];
+      plugin.settings.sourceLanguage = "en";
+      plugin.settings.targetLanguage = "ja";
+      return plugin.formatVocabularyCard(
+        {
+          word: "private",
+          baseDefinition: "プライベート",
+          contextExplanation: "- 現在の文脈では「民間の」という意味です。",
+          status: "done"
+        },
+        {
+          filePath: "Books/Test Chapter.md",
+          paragraph: "The private sector and the public sector are both mentioned here."
+        }
+      );
+    });
+
+    expect(note).toContain("### Metadata");
+    expect(note).toContain("- type:: vocabulary");
+    expect(note).toContain("- term:: private");
+    expect(note).toContain("- status:: new");
+    expect(note).toContain("- source_language:: en");
+    expect(note).toContain("- target_language:: ja");
+    expect(note).toContain("- source:: [[Books/Test Chapter.md]]");
+    expect(note).toContain("- tags:: #vocabulary #language/ja #status/new");
+  });
 });

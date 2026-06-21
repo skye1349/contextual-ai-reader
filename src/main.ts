@@ -1758,17 +1758,21 @@ export default class ContextualAIReaderPlugin extends Plugin {
     actions.appendChild(aiButton);
 
     actions.appendChild(this.createIconButton("book-plus", "Save word to excerpts", () => {
-      void this.saveExcerpt(sourceText, formatVocabularyCard(card, context, this.settings.targetLanguage));
+      void this.saveExcerpt(sourceText, this.formatVocabularyCard(card, context));
     }));
 
     actions.appendChild(this.createIconButton("copy", "Copy vocabulary note", () => {
-      void navigator.clipboard.writeText(formatVocabularyCard(card, context, this.settings.targetLanguage));
+      void navigator.clipboard.writeText(this.formatVocabularyCard(card, context));
       new Notice("Vocabulary note copied.");
     }));
 
     popup.appendChild(actions);
     popup.removeClass("is-hidden");
     this.positionPopup(rect);
+  }
+
+  private formatVocabularyCard(card: VocabularyCard, context: VocabularyContext): string {
+    return formatVocabularyCard(card, context, this.settings.targetLanguage, this.settings.sourceLanguage);
   }
 
   private showPopup(
@@ -2723,10 +2727,26 @@ function getVocabularyUiText(targetLanguage: string, backendLabel: string): Voca
   };
 }
 
-function formatVocabularyCard(card: VocabularyCard, context: VocabularyContext, targetLanguage: string): string {
+function formatVocabularyCard(
+  card: VocabularyCard,
+  context: VocabularyContext,
+  targetLanguage: string,
+  sourceLanguage: string
+): string {
   const uiText = getVocabularyUiText(targetLanguage, "AI");
+  const created = formatDateOnly(new Date());
   const lines = [
     `**${card.word}**`,
+    "",
+    "### Metadata",
+    "- type:: vocabulary",
+    `- term:: ${escapeInlineFieldValue(card.word)}`,
+    `- status:: new`,
+    `- source_language:: ${sourceLanguage}`,
+    `- target_language:: ${targetLanguage}`,
+    `- created:: ${created}`,
+    context.filePath ? `- source:: [[${context.filePath}]]` : "- source:: Unknown",
+    `- tags:: #vocabulary #language/${sanitizeTagSegment(targetLanguage)} #status/new`,
     "",
     `- ${uiText.baseDefinitionLabel}: ${card.baseDefinition || uiText.noLocalDefinition}`
   ];
@@ -3522,6 +3542,26 @@ function formatDateTime(date: Date): string {
     ":",
     pad(date.getMinutes())
   ].join("");
+}
+
+function formatDateOnly(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+
+  return [
+    date.getFullYear(),
+    "-",
+    pad(date.getMonth() + 1),
+    "-",
+    pad(date.getDate())
+  ].join("");
+}
+
+function escapeInlineFieldValue(value: string): string {
+  return value.replace(/\s+/g, " ").replace(/[|\[\]]/g, "").trim();
+}
+
+function sanitizeTagSegment(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
 }
 
 function blockquote(text: string): string {
