@@ -82,10 +82,9 @@ Only release from `main`, but do not commit the release bump directly on `main`.
 5. Commit the release bump and open a release PR.
 6. Wait for the Pull Request workflow to pass.
 7. Merge the release PR into `main`.
-8. The `Tag Release` workflow reads `manifest.json`, checks whether that version tag already exists, and creates the tag only when needed.
-9. The new tag triggers the `Release` workflow.
+8. The `Tag Release` workflow reads `manifest.json`, checks whether that version tag already exists, creates the tag only when needed, and publishes the GitHub release assets if the release does not exist yet.
 
-The Release workflow creates the GitHub release assets and artifact attestations. Obsidian Community Plugins will pick up the new release after the tag release is published.
+The release workflow creates `main.js`, `manifest.json`, `styles.css`, and artifact attestations. Obsidian Community Plugins will pick up the new release after the GitHub release is published.
 
 ## Recommended GitHub Repository Setting
 

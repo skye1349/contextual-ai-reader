@@ -6,11 +6,13 @@ on:
       - main
 
 permissions:
+  attestations: write
   contents: write
+  id-token: write
 
 jobs:
   tag-release:
-    name: Create version tag when needed
+    name: Create version tag and release when needed
     runs-on: ubuntu-latest
 
     steps:
@@ -55,7 +57,7 @@ jobs:
 
           if git rev-parse -q --verify "refs/tags/${{ steps.version.outputs.version }}" >/dev/null; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Tag ${{ steps.version.outputs.version }} already exists. Nothing to do."
+            echo "Tag ${{ steps.version.outputs.version }} already exists."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
@@ -67,3 +69,53 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "${{ steps.version.outputs.version }}" -m "Release ${{ steps.version.outputs.version }}"
           git push origin "refs/tags/${{ steps.version.outputs.version }}"
+
+      - name: Verify tag points to this commit
+        run: |
+          TAG_SHA="$(git rev-list -n 1 "${{ steps.version.outputs.version }}")"
+          HEAD_SHA="$(git rev-parse HEAD)"
+
+          if [ "$TAG_SHA" != "$HEAD_SHA" ]; then
+            echo "Tag ${{ steps.version.outputs.version }} points to $TAG_SHA, but main is at $HEAD_SHA." >&2
+            echo "Refusing to publish release assets for a tag that does not match this commit." >&2
+            exit 1
+          fi
+
+      - name: Check whether release already exists
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release ${{ steps.version.outputs.version }} already exists."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.release.outputs.exists == 'false'
+        run: npm ci
+
+      - name: Build release assets
+        if: steps.release.outputs.exists == 'false'
+        run: npm run build
+
+      - name: Create GitHub release
+        if: steps.release.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.version }}" main.js manifest.json styles.css \
+            --target "$GITHUB_SHA" \
+            --title "${{ steps.version.outputs.version }}" \
+            --notes "Release ${{ steps.version.outputs.version }}"
+
+      - name: Attest release assets
+        if: steps.release.outputs.exists == 'false'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
