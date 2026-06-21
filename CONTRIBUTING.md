@@ -60,9 +60,9 @@ The Pull Request workflow runs on:
 - macOS
 - Windows
 
-It verifies that the plugin builds on all three platforms, validates metadata, scans for common release blockers, checks that generated build assets are committed, and uploads an installable plugin package.
+It verifies that the plugin builds on all three platforms, validates metadata, scans for common release blockers, checks that generated build assets are committed, runs Obsidian-backed E2E smoke tests on macOS and Windows, and uploads an installable plugin package.
 
-GitHub Actions cannot provide a reliable interactive Obsidian desktop session for manual UI testing. Manual testing should happen in a local Obsidian test vault using the PR artifact.
+GitHub Actions cannot provide a reliable interactive Obsidian desktop session for manual exploratory testing. Instead, the E2E job launches a sandboxed Obsidian instance automatically and uploads screenshots/logs. Manual exploratory testing can still happen in a local Obsidian test vault using the PR artifact when a change is risky.
 
 ## Release Flow
 
@@ -101,6 +101,7 @@ Enable branch protection for `main`:
 - Require a pull request before merging.
 - Require status checks to pass before merging.
 - Require the `Build and validate` and `Package PR plugin artifact` workflow jobs.
+- Require the `Obsidian E2E` workflow jobs.
 - Restrict direct pushes to `main`.
 
 This repository setting is what actually prevents accidental direct pushes to `main`.

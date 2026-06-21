@@ -145,3 +145,59 @@ jobs:
           name: contextual-ai-reader-pr-${{ github.sha }}
           path: dist/contextual-ai-reader-pr-${{ github.sha }}.zip
           if-no-files-found: error
+
+  e2e:
+    name: Obsidian E2E (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: build
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Get Obsidian cache key
+        run: |
+          npx tsx wdio.conf.mts | grep 'obsidian-cache-key:' > obsidian-versions-lock.txt
+          rm -rf .obsidian-cache
+
+      - name: Cache Obsidian downloads
+        uses: actions/cache@v4
+        with:
+          path: .obsidian-cache
+          key: obsidian-cache-${{ matrix.os }}-${{ hashFiles('obsidian-versions-lock.txt') }}
+
+      - name: Run Obsidian E2E tests
+        run: npm run test:e2e
+        env:
+          WDIO_MAX_INSTANCES: 1
+
+      - name: Upload E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts-${{ matrix.os }}-${{ github.sha }}
+          path: e2e-artifacts/**
+          if-no-files-found: ignore
