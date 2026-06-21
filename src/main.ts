@@ -49,6 +49,8 @@ interface ContextualAIReaderSettings {
   singleShotMaxChars: number;
   speechLanguage: string;
   speechRate: number;
+  sourceLanguage: string;
+  targetLanguage: string;
   timeoutSeconds: number;
   vocabularyCache: Record<string, VocabularyCacheEntry>;
 }
@@ -78,9 +80,27 @@ const DEFAULT_SETTINGS: ContextualAIReaderSettings = {
   requireCommandForAutoTranslate: true,
   speechLanguage: "en-US",
   speechRate: 0.92,
+  sourceLanguage: "auto",
+  targetLanguage: "zh-CN",
   timeoutSeconds: 90,
   vocabularyCache: {}
 };
+
+const LANGUAGE_OPTIONS: Array<{ code: string; label: string; promptName: string }> = [
+  { code: "auto", label: "Auto detect", promptName: "the detected source language" },
+  { code: "zh-CN", label: "Simplified Chinese", promptName: "Simplified Chinese" },
+  { code: "zh-TW", label: "Traditional Chinese", promptName: "Traditional Chinese" },
+  { code: "en", label: "English", promptName: "English" },
+  { code: "ja", label: "Japanese", promptName: "Japanese" },
+  { code: "ko", label: "Korean", promptName: "Korean" },
+  { code: "fr", label: "French", promptName: "French" },
+  { code: "de", label: "German", promptName: "German" },
+  { code: "es", label: "Spanish", promptName: "Spanish" },
+  { code: "it", label: "Italian", promptName: "Italian" },
+  { code: "pt", label: "Portuguese", promptName: "Portuguese" },
+  { code: "ru", label: "Russian", promptName: "Russian" },
+  { code: "ar", label: "Arabic", promptName: "Arabic" }
+];
 
 function getHomeDir(): string {
   return process.env.HOME || process.env.USERPROFILE || homedir();
@@ -188,6 +208,22 @@ function isPrimaryModifierEvent(event: KeyboardEvent | MouseEvent): boolean {
 
 function isPrimaryModifierKey(event: KeyboardEvent): boolean {
   return process.platform === "darwin" ? event.key === "Meta" : event.key === "Control";
+}
+
+function getLanguageOption(code: string): { code: string; label: string; promptName: string } {
+  return LANGUAGE_OPTIONS.find((option) => option.code === code) ?? LANGUAGE_OPTIONS[0];
+}
+
+function getLanguagePromptName(code: string): string {
+  return getLanguageOption(code).promptName;
+}
+
+function getGoogleTranslateLanguageCode(code: string): string {
+  return code === "auto" ? "auto" : getLanguageOption(code).code;
+}
+
+function isChineseTargetLanguage(code: string): boolean {
+  return code === "zh-CN" || code === "zh-TW";
 }
 
 interface MarkdownBlock {
@@ -305,7 +341,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "translate-selection-to-chinese",
-      name: "Translate selection to Chinese",
+      name: "Translate selection to target language",
       editorCallback: (editor: Editor) => {
         void this.translateSelection(editor, "replace");
       }
@@ -313,7 +349,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "append-chinese-translation",
-      name: "Append Chinese translation below selection",
+      name: "Append target-language translation below selection",
       editorCallback: (editor: Editor) => {
         void this.translateSelection(editor, "append");
       }
@@ -329,7 +365,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "translate-current-file-to-chinese",
-      name: "Translate current Markdown file: append Chinese below",
+      name: "Translate current Markdown file: append target language below",
       callback: () => {
         void this.translateCurrentFile("append");
       }
@@ -337,7 +373,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "translate-current-file-interleaved-to-chinese",
-      name: "Translate current Markdown file: interleave Chinese paragraphs",
+      name: "Translate current Markdown file: interleave target-language paragraphs",
       callback: () => {
         void this.translateCurrentFile("interleave");
       }
@@ -345,7 +381,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "batch-translate-markdown-files-append",
-      name: "Batch translate Markdown files: append Chinese below",
+      name: "Batch translate Markdown files: append target language below",
       callback: () => {
         new BatchScopeModal(this.app, "append", (scopeText) => this.batchTranslateFiles(scopeText, "append")).open();
       }
@@ -353,7 +389,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "batch-translate-markdown-files-interleave",
-      name: "Batch translate Markdown files: interleave Chinese paragraphs",
+      name: "Batch translate Markdown files: interleave target-language paragraphs",
       callback: () => {
         new BatchScopeModal(this.app, "interleave", (scopeText) => this.batchTranslateFiles(scopeText, "interleave")).open();
       }
@@ -361,7 +397,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "speak-selection",
-      name: "Speak selected English text",
+      name: "Speak selected text",
       editorCallback: (editor: Editor) => {
         void this.speakText(editor.getSelection());
       }
@@ -488,14 +524,15 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
   private async translateSelectionToPopup(sourceText: string, rect: DOMRect) {
     const requestId = ++this.requestSerial;
-    const vocabularyWord = getSingleEnglishWord(sourceText);
+    const vocabularyWord = getVocabularyTerm(sourceText);
 
     if (vocabularyWord) {
       await this.showVocabularyLookup(sourceText, vocabularyWord, rect, requestId);
       return;
     }
 
-    const cached = this.translationCache.get(sourceText);
+    const translationCacheKey = this.buildTranslationCacheKey(sourceText);
+    const cached = this.translationCache.get(translationCacheKey);
 
     if (cached) {
       this.showPopup(cached, sourceText, rect, "done");
@@ -507,11 +544,11 @@ export default class ContextualAIReaderPlugin extends Plugin {
     this.showPopupLoading("Translating…", rect, () => { this.hidePopup(); });
 
     try {
-      const quickResult = await googleTranslate(sourceText);
+      const quickResult = await googleTranslate(sourceText, this.settings.targetLanguage, this.settings.sourceLanguage);
       if (requestId !== this.requestSerial) return;
       if (!quickResult) throw new Error("Empty response from Google Translate.");
 
-      this.rememberTranslation(sourceText, quickResult);
+      this.rememberTranslation(translationCacheKey, quickResult);
       this.showPopup(quickResult, sourceText, rect, "done");
       this.addPopupRefineButton(sourceText, rect, requestId);
     } catch {
@@ -525,10 +562,10 @@ export default class ContextualAIReaderPlugin extends Plugin {
     const context = await this.getVocabularyContext(sourceText);
     if (requestId !== this.requestSerial) return;
 
-    const cacheKey = buildVocabularyCacheKey(word, context.paragraph, this.settings.customPrompt);
+    const cacheKey = buildVocabularyCacheKey(word, context.paragraph, this.settings.customPrompt, this.settings.targetLanguage);
     const cached = this.settings.vocabularyCache[cacheKey];
-    const cachedBase = cached?.baseDefinition ?? this.findCachedVocabularyBase(word);
-    let baseDefinition = cachedBase ?? getLocalVocabularyDefinition(word);
+    const cachedBase = cached?.baseDefinition ?? this.findCachedVocabularyBase(word, this.settings.targetLanguage);
+    let baseDefinition = cachedBase ?? getLocalVocabularyDefinition(word, this.settings.targetLanguage);
 
     if (cached?.contextExplanation) {
       this.showVocabularyPopup({
@@ -548,7 +585,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     if (!baseDefinition) {
       try {
-        const quickDefinition = await googleTranslate(word);
+        const quickDefinition = await googleTranslate(word, this.settings.targetLanguage, this.settings.sourceLanguage);
         if (requestId !== this.requestSerial) return;
         if (quickDefinition && quickDefinition.toLowerCase() !== word.toLowerCase()) {
           baseDefinition = quickDefinition;
@@ -586,7 +623,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     try {
       const explanation = (await this.runAIPrompt(
-        buildVocabularyPrompt(word, sourceText, context, this.settings.customPrompt)
+        buildVocabularyPrompt(word, sourceText, context, this.settings.customPrompt, this.settings.targetLanguage, this.settings.sourceLanguage)
       )).trim();
 
       if (requestId !== this.requestSerial) return;
@@ -638,7 +675,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
       window.clearInterval(timerInterval);
       if (requestId !== this.requestSerial) return;
       if (!translation) throw new Error(`${backendLabel} returned an empty translation.`);
-      this.rememberTranslation(sourceText, translation);
+      this.rememberTranslation(this.buildTranslationCacheKey(sourceText), translation);
       this.showPopup(translation, sourceText, rect, "done", this.getCurrentTokenUsage());
       this.addPopupRefineButton(sourceText, rect, requestId);
     } catch (error) {
@@ -781,8 +818,8 @@ export default class ContextualAIReaderPlugin extends Plugin {
       }
 
       new Notice(`${mode === "append"
-        ? "Chinese translation appended below the current file."
-        : "Chinese translation inserted after each paragraph."}${this.tokenUsageSuffix()}`, 12000);
+        ? "Target-language translation appended below the current file."
+        : "Target-language translation inserted after each paragraph."}${this.tokenUsageSuffix()}`, 12000);
     } catch (error) {
       new Notice(isStoppedError(error)
         ? `Translation stopped. Running AI process was killed.${this.tokenUsageSuffix()}`
@@ -943,7 +980,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
     const text = cleanSpeechText(sourceText);
 
     if (!text) {
-      new Notice("Select some English text first.");
+      new Notice("Select some text first.");
       return;
     }
 
@@ -997,7 +1034,10 @@ export default class ContextualAIReaderPlugin extends Plugin {
   }
 
   private async runAITranslation(sourceText: string, onChunk?: (text: string) => void): Promise<string> {
-    return await this.runAIPrompt(buildTranslationPrompt(sourceText, this.settings.customPrompt), onChunk);
+    return await this.runAIPrompt(
+      buildTranslationPrompt(sourceText, this.settings.customPrompt, this.settings.targetLanguage, this.settings.sourceLanguage),
+      onChunk
+    );
   }
 
   private async runAIPrompt(prompt: string, onChunk?: (text: string) => void): Promise<string> {
@@ -1351,7 +1391,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
   private async translateBlockBatch(blockTexts: string[], onChunk?: (chunk: string) => void): Promise<string[]> {
     if (this.isCancelled) throw new Error("Translation stopped.");
 
-    const prompt = buildBlockTranslationPrompt(blockTexts, this.settings.customPrompt);
+    const prompt = buildBlockTranslationPrompt(blockTexts, this.settings.customPrompt, this.settings.targetLanguage, this.settings.sourceLanguage);
     const rawResult = await this.runAIPrompt(prompt, onChunk);
 
     if (this.isCancelled) throw new Error("Translation stopped.");
@@ -1523,12 +1563,12 @@ export default class ContextualAIReaderPlugin extends Plugin {
     };
   }
 
-  private findCachedVocabularyBase(word: string): string | undefined {
+  private findCachedVocabularyBase(word: string, targetLanguage: string): string | undefined {
     const normalizedWord = normalizeVocabularyWord(word);
+    const match = Object.entries(this.settings.vocabularyCache)
+      .find(([key, entry]) => key.startsWith(`${targetLanguage}:`) && normalizeVocabularyWord(entry.word) === normalizedWord && entry.baseDefinition);
 
-    return Object.values(this.settings.vocabularyCache)
-      .find((entry) => normalizeVocabularyWord(entry.word) === normalizedWord && entry.baseDefinition)
-      ?.baseDefinition;
+    return match?.[1].baseDefinition;
   }
 
   private async rememberVocabulary(cacheKey: string, entry: VocabularyCacheEntry) {
@@ -1545,8 +1585,12 @@ export default class ContextualAIReaderPlugin extends Plugin {
     await this.saveSettings();
   }
 
-  private rememberTranslation(sourceText: string, translation: string) {
-    this.translationCache.set(sourceText, translation);
+  private buildTranslationCacheKey(sourceText: string): string {
+    return `${this.settings.sourceLanguage}:${this.settings.targetLanguage}:${sourceText}`;
+  }
+
+  private rememberTranslation(cacheKey: string, translation: string) {
+    this.translationCache.set(cacheKey, translation);
 
     if (this.translationCache.size > 30) {
       const oldestKey = this.translationCache.keys().next().value as string | undefined;
@@ -1739,7 +1783,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
     const actions = activeDocument.createElement("div");
     actions.className = "contextual-ai-reader-actions";
 
-    actions.appendChild(this.createIconButton("volume-2", "Read original English", () => {
+    actions.appendChild(this.createIconButton("volume-2", "Read original text", () => {
       void this.speakText(sourceText);
     }));
 
@@ -1928,8 +1972,8 @@ class BatchScopeModal extends Modal {
 
   onOpen() {
     this.setTitle(this.mode === "append"
-      ? "Batch translate: append Chinese below"
-      : "Batch translate: interleave Chinese paragraphs");
+      ? "Batch translate: append target language below"
+      : "Batch translate: interleave target-language paragraphs");
     this.contentEl.empty();
 
     const description = activeDocument.createElement("p");
@@ -2123,6 +2167,34 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
             })
         );
     }
+
+    new Setting(containerEl)
+      .setName("Source language")
+      .setDesc("Language of the text you are reading. Auto detect works well for mixed notes.")
+      .addDropdown((dropdown) => {
+        LANGUAGE_OPTIONS.forEach((option) => dropdown.addOption(option.code, option.label));
+        dropdown
+          .setValue(this.plugin.settings.sourceLanguage)
+          .onChange(async (value) => {
+            this.plugin.settings.sourceLanguage = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Learning / target language")
+      .setDesc("The language you want translations and vocabulary explanations to use.")
+      .addDropdown((dropdown) => {
+        LANGUAGE_OPTIONS
+          .filter((option) => option.code !== "auto")
+          .forEach((option) => dropdown.addOption(option.code, option.label));
+        dropdown
+          .setValue(this.plugin.settings.targetLanguage === "auto" ? DEFAULT_SETTINGS.targetLanguage : this.plugin.settings.targetLanguage)
+          .onChange(async (value) => {
+            this.plugin.settings.targetLanguage = value || DEFAULT_SETTINGS.targetLanguage;
+            await this.plugin.saveSettings();
+          });
+      });
 
     new Setting(containerEl)
       .setName("Auto translate selection")
@@ -2359,10 +2431,18 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
   }
 }
 
-function buildTranslationPrompt(sourceText: string, customPrompt: string): string {
+function buildTranslationPrompt(
+  sourceText: string,
+  customPrompt: string,
+  targetLanguage: string,
+  sourceLanguage: string
+): string {
+  const target = getLanguagePromptName(targetLanguage);
+  const source = getLanguagePromptName(sourceLanguage);
+
   return [
     "You are a precise Markdown translation engine.",
-    "Translate the `text` field in the JSON payload to Simplified Chinese.",
+    `Translate the \`text\` field in the JSON payload from ${source} to ${target}.`,
     customPrompt.trim()
       ? `User custom context and preferences:\n${customPrompt.trim()}`
       : "User custom context and preferences: none.",
@@ -2382,20 +2462,25 @@ function buildVocabularyPrompt(
   word: string,
   selectedText: string,
   context: VocabularyContext,
-  customPrompt: string
+  customPrompt: string,
+  targetLanguage: string,
+  sourceLanguage: string
 ): string {
+  const target = getLanguagePromptName(targetLanguage);
+  const source = getLanguagePromptName(sourceLanguage);
+
   return [
-    "You are a concise bilingual vocabulary coach for a Chinese reader.",
-    "Explain the selected English word in Simplified Chinese based on the current reading context.",
+    `You are a concise bilingual vocabulary coach for a reader learning ${target}.`,
+    `Explain the selected word or phrase in ${target} based on the current reading context. The source language is ${source}.`,
     customPrompt.trim()
       ? `User custom context and preferences:\n${customPrompt.trim()}`
       : "User custom context and preferences: none.",
     "",
     "Rules:",
-    "- Return only the explanation in Simplified Chinese.",
+    `- Return only the explanation in ${target}.`,
     "- Keep it concise: 3 to 5 short bullet points.",
     "- Explain the word's meaning in this exact context, not only a generic dictionary meaning.",
-    "- Include a natural Chinese rendering of the local phrase if helpful.",
+    `- Include a natural ${target} rendering of the local phrase if helpful.`,
     "- Mention common word family or confusion points only when useful.",
     "",
     "JSON payload:",
@@ -2408,12 +2493,19 @@ function buildVocabularyPrompt(
   ].join("\n");
 }
 
-function getSingleEnglishWord(text: string): string | null {
+function getVocabularyTerm(text: string): string | null {
   const cleaned = text
     .trim()
     .replace(/^[“"'([{]+|[”"')\]}.,;:!?]+$/g, "");
 
-  if (!/^[A-Za-z][A-Za-z'-]{1,39}$/.test(cleaned)) {
+  if (cleaned.length < 2 || cleaned.length > 60 || /[\r\n]/.test(cleaned)) {
+    return null;
+  }
+
+  const isSingleLatinLikeWord = /^[\p{L}][\p{L}\p{M}'’-]{1,39}$/u.test(cleaned);
+  const isShortCjkTerm = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}ー・]{1,20}$/u.test(cleaned);
+
+  if (!isSingleLatinLikeWord && !isShortCjkTerm) {
     return null;
   }
 
@@ -2424,11 +2516,11 @@ function normalizeVocabularyWord(word: string): string {
   return word.toLowerCase().replace(/^'+|'+$/g, "");
 }
 
-function buildVocabularyCacheKey(word: string, paragraph: string, customPrompt: string): string {
+function buildVocabularyCacheKey(word: string, paragraph: string, customPrompt: string, targetLanguage: string): string {
   const normalizedWord = normalizeVocabularyWord(word);
   const contextHash = hashString(normalizeWhitespace(paragraph).slice(0, 1600));
   const promptHash = hashString(customPrompt.trim());
-  return `${normalizedWord}:${contextHash}:${promptHash}`;
+  return `${targetLanguage}:${normalizedWord}:${contextHash}:${promptHash}`;
 }
 
 function extractParagraphAround(content: string, start: number, end: number): string {
@@ -2446,7 +2538,11 @@ function extractParagraphAround(content: string, start: number, end: number): st
     .slice(0, 1800);
 }
 
-function getLocalVocabularyDefinition(word: string): string | undefined {
+function getLocalVocabularyDefinition(word: string, targetLanguage: string): string | undefined {
+  if (!isChineseTargetLanguage(targetLanguage)) {
+    return undefined;
+  }
+
   const normalizedWord = normalizeVocabularyWord(word);
   const candidates = getVocabularyLookupCandidates(normalizedWord);
 
@@ -2672,13 +2768,20 @@ const BLOCK_SEP = "§§§BLOCK§§§";
 const SHORT_PROSE_UNIT_TARGET_CHARS = 1200;
 const SHORT_PROSE_UNIT_MAX_CHARS = 1800;
 
-function buildBlockTranslationPrompt(blockTexts: string[], customPrompt: string): string {
+function buildBlockTranslationPrompt(
+  blockTexts: string[],
+  customPrompt: string,
+  targetLanguage: string,
+  sourceLanguage: string
+): string {
   const numberedBlocks = blockTexts
     .map((text, i) => `#${i + 1}\n${text}`)
     .join(`\n${BLOCK_SEP}\n`);
+  const target = getLanguagePromptName(targetLanguage);
+  const source = getLanguagePromptName(sourceLanguage);
 
   return [
-    "Translate each block to Simplified Chinese.",
+    `Translate each block from ${source} to ${target}.`,
     customPrompt.trim()
       ? `Context:\n${customPrompt.trim()}`
       : "",
@@ -3468,8 +3571,10 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-async function googleTranslate(text: string, targetLang = "zh-CN"): Promise<string> {
-  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`;
+async function googleTranslate(text: string, targetLanguage: string, sourceLanguage: string): Promise<string> {
+  const targetLang = getGoogleTranslateLanguageCode(targetLanguage);
+  const sourceLang = getGoogleTranslateLanguageCode(sourceLanguage);
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`;
   const response = await requestUrl({ url, throw: false });
   if (response.status < 200 || response.status >= 300) throw new Error(`Google Translate HTTP ${response.status}`);
   const data = parseGoogleTranslateResponse(response.json);

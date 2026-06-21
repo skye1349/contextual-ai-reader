@@ -1,7 +1,7 @@
 {
   "name": "contextual-ai-reader",
-  "version": "1.0.5",
-  "description": "AI reading companion for translation, contextual vocabulary, PDFs, and Markdown notes.",
+  "version": "1.0.6",
+  "description": "Multilingual AI reading companion for translation, contextual vocabulary, PDFs, and Markdown notes.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
@@ -11,6 +11,7 @@
     "obsidian",
     "codex",
     "translation",
+    "multilingual",
     "reading",
     "vocabulary"
   ],
