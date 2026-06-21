@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import { existsSync, readdirSync } from "fs";
 import { mkdtemp, readFile, rm } from "fs/promises";
 import { homedir, tmpdir } from "os";
-import { join } from "path";
+import { delimiter, join } from "path";
 import {
   App,
   Editor,
@@ -82,44 +82,90 @@ const DEFAULT_SETTINGS: ContextualAIReaderSettings = {
   vocabularyCache: {}
 };
 
-const CODEX_CANDIDATES = [
-  "/Applications/Codex.app/Contents/Resources/codex",
-  "/opt/homebrew/bin/codex",
-  "/usr/local/bin/codex",
-  "codex"
-];
+function getHomeDir(): string {
+  return process.env.HOME || process.env.USERPROFILE || homedir();
+}
 
-const CODEX_PATH_ENTRIES = [
-  "/Applications/Codex.app/Contents/Resources",
-  "/opt/homebrew/bin",
-  "/usr/local/bin",
-  "/usr/bin",
-  "/bin",
-  "/usr/sbin",
-  "/sbin"
-];
+function getAppDataDir(): string {
+  return process.env.APPDATA || join(getHomeDir(), "AppData", "Roaming");
+}
+
+function buildCodexCandidates(): string[] {
+  const home = getHomeDir();
+  const appData = getAppDataDir();
+
+  return process.platform === "win32"
+    ? [
+      join(appData, "npm", "codex.cmd"),
+      join(home, "AppData", "Local", "Programs", "Codex", "codex.exe"),
+      "codex.cmd",
+      "codex.exe",
+      "codex"
+    ]
+    : [
+      "/Applications/Codex.app/Contents/Resources/codex",
+      "/opt/homebrew/bin/codex",
+      "/usr/local/bin/codex",
+      "codex"
+    ];
+}
+
+function buildPathEntries(): string[] {
+  const home = getHomeDir();
+  const appData = getAppDataDir();
+
+  return process.platform === "win32"
+    ? [
+      join(appData, "npm"),
+      join(home, "AppData", "Local", "Programs", "Codex"),
+      join(home, ".codex", "bin")
+    ]
+    : [
+      "/Applications/Codex.app/Contents/Resources",
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin"
+    ];
+}
+
+const CODEX_CANDIDATES = buildCodexCandidates();
+const CODEX_PATH_ENTRIES = buildPathEntries();
 
 const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 
 function buildClaudeCandidates(): string[] {
-  const home = process.env.HOME || homedir();
+  const home = getHomeDir();
+  const appData = getAppDataDir();
   const candidates: string[] = [
-    "/opt/homebrew/bin/claude",
-    "/usr/local/bin/claude",
-    `${home}/.claude/local/claude`
+    ...(process.platform === "win32"
+      ? [
+        join(appData, "npm", "claude.cmd"),
+        join(home, ".claude", "local", "claude.cmd"),
+        join(home, ".claude", "local", "claude.exe")
+      ]
+      : [
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+        `${home}/.claude/local/claude`
+      ])
   ];
 
-  // Claude Code desktop app ships a native macOS binary inside the .app bundle
-  const claudeCodeBase = `${home}/Library/Application Support/Claude/claude-code`;
-  try {
-    const versions = readdirSync(claudeCodeBase).sort().reverse();
-    for (const version of versions) {
-      candidates.push(`${claudeCodeBase}/${version}/claude.app/Contents/MacOS/claude`);
+  if (process.platform === "darwin") {
+    const claudeCodeBase = `${home}/Library/Application Support/Claude/claude-code`;
+    try {
+      const versions = readdirSync(claudeCodeBase).sort().reverse();
+      for (const version of versions) {
+        candidates.push(`${claudeCodeBase}/${version}/claude.app/Contents/MacOS/claude`);
+      }
+    } catch {
+      // directory doesn't exist
     }
-  } catch {
-    // directory doesn't exist
   }
 
+  candidates.push(process.platform === "win32" ? "claude.cmd" : "claude");
   candidates.push("claude");
   return candidates;
 }
@@ -130,6 +176,18 @@ interface SourceReference {
   endLine?: number;
   line?: number;
   path: string;
+}
+
+function getPrimaryModifierLabel(): string {
+  return process.platform === "darwin" ? "Command" : "Ctrl";
+}
+
+function isPrimaryModifierEvent(event: KeyboardEvent | MouseEvent): boolean {
+  return process.platform === "darwin" ? event.metaKey : event.ctrlKey;
+}
+
+function isPrimaryModifierKey(event: KeyboardEvent): boolean {
+  return process.platform === "darwin" ? event.key === "Meta" : event.key === "Control";
 }
 
 interface MarkdownBlock {
@@ -232,7 +290,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
   private operationCancelled = false;
   private sessionTokens: TokenUsage = createEmptyTokenUsage();
   private onTokensUpdate?: (tokens: TokenUsage) => void;
-  private isCommandKeyPressed = false;
+  private isModifierKeyPressed = false;
   private popupEl?: HTMLDivElement;
   private popupRect?: DOMRect;
   private requestSerial = 0;
@@ -323,27 +381,27 @@ export default class ContextualAIReaderPlugin extends Plugin {
       this.handleSelectionChange();
     });
     this.registerDomEvent(window, "keydown", (event) => {
-      if (event.key === "Meta" || event.metaKey) {
-        this.isCommandKeyPressed = true;
+      if (isPrimaryModifierEvent(event)) {
+        this.isModifierKeyPressed = true;
       }
     });
     this.registerDomEvent(window, "keyup", (event) => {
-      if (event.key === "Meta") {
-        this.isCommandKeyPressed = false;
+      if (isPrimaryModifierKey(event)) {
+        this.isModifierKeyPressed = false;
         this.commandSelectionGestureUntil = Date.now() + 700;
       }
     });
     this.registerDomEvent(window, "blur", () => {
-      this.isCommandKeyPressed = false;
+      this.isModifierKeyPressed = false;
       this.commandSelectionGestureUntil = 0;
     });
     this.registerDomEvent(activeDocument, "mousedown", (event) => {
-      if (event.metaKey) {
+      if (isPrimaryModifierEvent(event)) {
         this.commandSelectionGestureUntil = Date.now() + 2_000;
       }
     }, true);
     this.registerDomEvent(activeDocument, "mouseup", (event) => {
-      if (event.metaKey) {
+      if (isPrimaryModifierEvent(event)) {
         this.commandSelectionGestureUntil = Date.now() + 700;
       }
     }, true);
@@ -425,7 +483,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
       return true;
     }
 
-    return this.isCommandKeyPressed || Date.now() <= this.commandSelectionGestureUntil;
+    return this.isModifierKeyPressed || Date.now() <= this.commandSelectionGestureUntil;
   }
 
   private async translateSelectionToPopup(sourceText: string, rect: DOMRect) {
@@ -1934,6 +1992,7 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+    const modifierLabel = getPrimaryModifierLabel();
 
     new Setting(containerEl)
       .setName("AI backend")
@@ -1959,7 +2018,7 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
         .setDesc("Used by Claude or Auto mode. Leave empty to auto-detect the Claude Code CLI.")
         .addText((text) =>
           text
-            .setPlaceholder("/opt/homebrew/bin/claude")
+            .setPlaceholder(process.platform === "win32" ? "claude.cmd" : "/opt/homebrew/bin/claude")
             .setValue(this.plugin.settings.claudeCommand)
             .onChange(async (value) => {
               this.plugin.settings.claudeCommand = value.trim();
@@ -2078,8 +2137,8 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Require Command key for auto translate")
-      .setDesc("When enabled, the popup only appears if you hold Command while selecting text.")
+      .setName(`Require ${modifierLabel} key for auto translate`)
+      .setDesc(`When enabled, the popup only appears if you hold ${modifierLabel} while selecting text.`)
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.requireCommandForAutoTranslate)
@@ -2095,7 +2154,7 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
         .setDesc("Used by Codex or Auto fallback. Leave empty to auto-detect Codex.app or the local Codex CLI.")
         .addText((text) =>
           text
-            .setPlaceholder("/Applications/Codex.app/Contents/Resources/codex")
+            .setPlaceholder(process.platform === "win32" ? "codex.cmd" : "/Applications/Codex.app/Contents/Resources/codex")
             .setValue(this.plugin.settings.codexCommand)
             .onChange(async (value) => {
               this.plugin.settings.codexCommand = value.trim();
@@ -2957,7 +3016,7 @@ function spawnProcess(
   const promise = new Promise<ProcessResult>((resolve, reject) => {
     const child = spawn(command, args, {
       env: buildCodexEnv(),
-      shell: false,
+      shell: process.platform === "win32",
       windowsHide: true
     });
 
@@ -3036,7 +3095,7 @@ function buildCodexEnv(): NodeJS.ProcessEnv {
   const mergedPath = [
     ...CODEX_PATH_ENTRIES,
     ...existingPath.split(":").filter(Boolean)
-  ].filter((entry, index, entries) => entries.indexOf(entry) === index).join(":");
+  ].filter((entry, index, entries) => entries.indexOf(entry) === index).join(delimiter);
 
   return {
     ...process.env,

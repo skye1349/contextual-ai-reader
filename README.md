@@ -10,7 +10,7 @@ It can use local AI assistant CLIs such as Codex and Claude Code, or direct API-
 ## Features
 
 - Translate selected text to Simplified Chinese.
-- Show the selection popup only when holding `Command` while selecting text.
+- Show the selection popup only when holding the primary modifier key while selecting text: `Command` on macOS, `Ctrl` on Windows/Linux.
 - Explain a selected English word with local/cache definitions first, then optionally enrich it with AI using the current paragraph as context.
 - Translate selected text from PDFs when Obsidian can select the PDF text layer.
 - Read selected English text aloud with the system text-to-speech voice.
@@ -41,7 +41,7 @@ The default mode is `Auto`, so existing local Codex usage remains the default pa
 Recommended basic settings:
 
 - `AI backend`: leave as `Auto` if you want Codex first and Claude Code as fallback.
-- `Require Command key for auto translate`: keep enabled so normal text selection does not trigger translation.
+- `Require Command/Ctrl key for auto translate`: keep enabled so normal text selection does not trigger translation.
 - `Custom prompt / context`: add the book, domain, terminology, and tone you want the AI to respect.
 - `Timeout`: increase this for long full-file or batch translation.
 - `Single-shot translation limit`: smaller notes are translated in one request for better context. Defaults to `60000` characters.
@@ -54,6 +54,8 @@ Local backend settings:
 - `Reasoning effort`: defaults to `none`, which is usually best for translation speed and cost.
 - `Claude command`: optional path to `claude`; leave empty to auto-detect.
 - `Claude model`: model used by Claude Code.
+
+On Windows, local CLI mode expects `codex.cmd` or `claude.cmd` to be available in PATH, or you can enter the full command path in settings. API-token modes do not require local CLI installation.
 
 API backend settings:
 
@@ -82,12 +84,12 @@ By default, normal text selection does nothing. This avoids interrupting ordinar
 To open the popup:
 
 1. Open a Markdown note or a selectable PDF.
-2. Hold `Command` on macOS.
-3. While holding `Command`, select English text.
+2. Hold the primary modifier key: `Command` on macOS, `Ctrl` on Windows/Linux.
+3. While holding that key, select English text.
 4. Release the mouse or trackpad.
 5. The popup appears near the selected text.
 
-If you turn off `Require Command key for auto translate`, the popup appears after ordinary text selection. This is not recommended for heavy note-taking workflows.
+If you turn off `Require Command/Ctrl key for auto translate`, the popup appears after ordinary text selection. This is not recommended for heavy note-taking workflows.
 
 ### Popup Buttons
 
@@ -103,7 +105,7 @@ The popup can show different buttons depending on the selected text and result s
 
 When you select a phrase, sentence, or paragraph:
 
-1. Hold `Command` and select the text.
+1. Hold `Command` on macOS or `Ctrl` on Windows/Linux, then select the text.
 2. The plugin first tries a quick translation for the popup.
 3. Click the Sparkles button if you want the configured AI backend to refine the translation.
 4. Use Copy or Book plus if you want to keep the result.
@@ -114,7 +116,7 @@ For selected paragraphs, the quick popup translation is meant for speed. The Spa
 
 When you select exactly one English word:
 
-1. Hold `Command` and select the word.
+1. Hold `Command` on macOS or `Ctrl` on Windows/Linux, then select the word.
 2. The popup first checks the local vocabulary cache and built-in dictionary.
 3. If a local/cache definition exists, it appears immediately.
 4. The plugin then uses the surrounding paragraph and your custom prompt to generate an AI context explanation.
