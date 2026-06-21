@@ -70,17 +70,6 @@ jobs:
           git tag -a "${{ steps.version.outputs.version }}" -m "Release ${{ steps.version.outputs.version }}"
           git push origin "refs/tags/${{ steps.version.outputs.version }}"
 
-      - name: Verify tag points to this commit
-        run: |
-          TAG_SHA="$(git rev-list -n 1 "${{ steps.version.outputs.version }}")"
-          HEAD_SHA="$(git rev-parse HEAD)"
-
-          if [ "$TAG_SHA" != "$HEAD_SHA" ]; then
-            echo "Tag ${{ steps.version.outputs.version }} points to $TAG_SHA, but main is at $HEAD_SHA." >&2
-            echo "Refusing to publish release assets for a tag that does not match this commit." >&2
-            exit 1
-          fi
-
       - name: Check whether release already exists
         id: release
         env:
@@ -91,6 +80,30 @@ jobs:
             echo "Release ${{ steps.version.outputs.version }} already exists."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout release tag
+        if: steps.release.outputs.exists == 'false'
+        run: |
+          git checkout --detach "${{ steps.version.outputs.version }}"
+
+          TAG_VERSION="$(node -p "require('./manifest.json').version")"
+          TAG_PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          TAG_HAS_VERSION_ENTRY="$(node -p "Boolean(require('./versions.json')[require('./manifest.json').version])")"
+
+          if [ "$TAG_VERSION" != "${{ steps.version.outputs.version }}" ]; then
+            echo "Release tag contains manifest version $TAG_VERSION, expected ${{ steps.version.outputs.version }}." >&2
+            exit 1
+          fi
+
+          if [ "$TAG_VERSION" != "$TAG_PACKAGE_VERSION" ]; then
+            echo "Release tag manifest version ($TAG_VERSION) does not match package.json version ($TAG_PACKAGE_VERSION)." >&2
+            exit 1
+          fi
+
+          if [ "$TAG_HAS_VERSION_ENTRY" != "true" ]; then
+            echo "Release tag versions.json is missing $TAG_VERSION." >&2
+            exit 1
           fi
 
       - name: Install dependencies
@@ -107,7 +120,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ steps.version.outputs.version }}" main.js manifest.json styles.css \
-            --target "$GITHUB_SHA" \
             --title "${{ steps.version.outputs.version }}" \
             --notes "Release ${{ steps.version.outputs.version }}"
 
