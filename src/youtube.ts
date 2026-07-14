@@ -95,7 +95,7 @@ export class YouTubeUrlModal extends Modal {
   }
 
   onOpen() {
-    this.setTitle("Open YouTube learning player");
+    this.setTitle("Open YouTube video");
 
     new Setting(this.contentEl)
       .setName("YouTube link")
@@ -153,7 +153,7 @@ export class YouTubeLearningView extends ItemView {
   }
 
   getDisplayText() {
-    return this.data?.title || "YouTube learning player";
+    return this.data?.title || "YouTube video";
   }
 
   getIcon() {
@@ -254,8 +254,8 @@ export class YouTubeLearningView extends ItemView {
 
   private renderEmptyState() {
     const empty = this.containerEl.createDiv({ cls: "youtube-reader-empty" });
-    empty.createEl("h3", { text: "YouTube learning player" });
-    empty.createEl("p", { text: "Use the command palette and run “Open YouTube learning player”." });
+    empty.createEl("h3", { text: "Open a YouTube video" });
+    empty.createEl("p", { text: "Use the command palette and run “Open YouTube video”." });
   }
 
   private renderLoading() {

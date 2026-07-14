@@ -4,6 +4,31 @@
 
 Contextual AI Reader es un complemento de escritorio para Obsidian pensado para lectura asistida: traducción, explicación de vocabulario en contexto, lectura en voz alta, notas de extractos, PDF seleccionables y traducción de archivos Markdown.
 
+## Requisitos del sistema e instalación
+
+Usa Obsidian de escritorio en macOS, Windows o Linux. En móvil puedes leer notas sincronizadas, pero no ejecutar las herramientas locales de CLI o vídeo. La instalación desde Community Plugins no necesita Node.js, npm ni el repositorio de código. Elige un backend de IA:
+
+- Codex: instala [Codex App o CLI](https://developers.openai.com/codex/cli) y ejecuta `codex login` si usas la CLI.
+- Claude Code: instala Claude Code e inicia sesión.
+- API: configura una clave de OpenAI o Anthropic; no requiere una CLI local.
+
+Los subtítulos protegidos de YouTube, la captura limpia de fotogramas y la transcripción sin CC requieren herramientas adicionales.
+
+| Sistema | Instalar `yt-dlp` y `ffmpeg` |
+| --- | --- |
+| macOS | `brew install yt-dlp ffmpeg` |
+| Windows | `winget install yt-dlp.yt-dlp` y `winget install Gyan.FFmpeg` |
+| Ubuntu/Debian | `sudo apt update && sudo apt install yt-dlp ffmpeg` |
+| Otro Linux | Usa el gestor de paquetes de la distribución |
+
+Reinicia Obsidian después de instalarlas. Si la detección automática falla, escribe la ruta completa del ejecutable en los ajustes. La transcripción sin CC también necesita una clave de Groq u OpenAI.
+
+## Datos locales y caché
+
+Los ajustes, claves API, caché de vocabulario, subtítulos y traducciones de YouTube se guardan por bóveda en `<vault>/.obsidian/plugins/contextual-ai-reader/data.json`. Para conservar la caché, no borres `data.json`, la carpeta del complemento ni sus datos. Copia el archivo de forma privada al cambiar de bóveda.
+
+La caché conserva los 30 vídeos más recientes. Las capturas y notas de transcripción son archivos normales de la bóveda y no se borran al limpiar la caché. `data.json` puede contener claves API: no lo publiques, compartas ni incluyas en Git.
+
 ## Funciones
 
 - Elige el idioma de origen o usa detección automática.
@@ -46,8 +71,8 @@ Elige `AI backend` en la configuración.
 
 Usa la Command Palette:
 
-- `Translate current Markdown file: append target language below`
-- `Translate current Markdown file: interleave target-language paragraphs`
+- `Translate current Markdown file and append translation`
+- `Translate current Markdown file with interleaved translation`
 
 Para traducción por lotes, las rutas son relativas al vault, no rutas absolutas.
 

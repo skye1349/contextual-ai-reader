@@ -446,7 +446,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "translate-selection-to-chinese",
-      name: "Translate selection to target language",
+      name: "Translate selected text",
       editorCallback: (editor: Editor) => {
         void this.translateSelection(editor, "replace");
       }
@@ -454,7 +454,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "append-chinese-translation",
-      name: "Append target-language translation below selection",
+      name: "Insert translation below selected text",
       editorCallback: (editor: Editor) => {
         void this.translateSelection(editor, "append");
       }
@@ -462,7 +462,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "check-codex-login",
-      name: "Check Codex login",
+      name: "Check Codex CLI login",
       callback: () => {
         void this.checkCodexLogin();
       }
@@ -470,7 +470,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "translate-current-file-to-chinese",
-      name: "Translate current Markdown file: append target language below",
+      name: "Translate current Markdown file and append translation",
       callback: () => {
         void this.translateCurrentFile("append");
       }
@@ -478,7 +478,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "translate-current-file-interleaved-to-chinese",
-      name: "Translate current Markdown file: interleave target-language paragraphs",
+      name: "Translate current Markdown file with interleaved translation",
       callback: () => {
         void this.translateCurrentFile("interleave");
       }
@@ -486,7 +486,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "batch-translate-markdown-files-append",
-      name: "Batch translate Markdown files: append target language below",
+      name: "Translate multiple Markdown files and append translations",
       callback: () => {
         new BatchScopeModal(this.app, "append", (scopeText) => this.batchTranslateFiles(scopeText, "append")).open();
       }
@@ -494,7 +494,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "batch-translate-markdown-files-interleave",
-      name: "Batch translate Markdown files: interleave target-language paragraphs",
+      name: "Translate multiple Markdown files with interleaved translations",
       callback: () => {
         new BatchScopeModal(this.app, "interleave", (scopeText) => this.batchTranslateFiles(scopeText, "interleave")).open();
       }
@@ -502,7 +502,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "speak-selection",
-      name: "Speak selected text",
+      name: "Read selected text aloud",
       editorCallback: (editor: Editor) => {
         void this.speakText(editor.getSelection());
       }
@@ -510,7 +510,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "save-selection-to-excerpts",
-      name: "Save selection to excerpts",
+      name: "Save selected text to excerpt note",
       editorCallback: (editor: Editor) => {
         void this.saveExcerpt(editor.getSelection());
       }
@@ -518,7 +518,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "open-youtube-learning-player",
-      name: "Open YouTube learning player",
+      name: "Open YouTube video",
       callback: () => {
         new YouTubeUrlModal(this.app, (url) => { void this.openYouTubePlayer(url); }).open();
       }
@@ -526,11 +526,11 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "capture-youtube-frame-to-note",
-      name: "Capture current YouTube frame to note",
+      name: "Save current YouTube frame to note",
       callback: () => {
         const view = this.getYouTubeView();
         if (!view) {
-          new Notice("Open the YouTube learning player first.");
+          new Notice("Open a YouTube video first.");
           return;
         }
         void this.captureYouTubeFrame(view);
@@ -539,7 +539,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "create-youtube-transcript-note",
-      name: "Create note from current YouTube transcript",
+      name: "Create transcript note from current YouTube video",
       callback: () => {
         const data = this.getYouTubeView()?.getVideoData();
         if (!data) {
@@ -1228,7 +1228,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
     await leaf.setViewState({ type: YOUTUBE_VIEW_TYPE, active: true });
     const view = leaf.view;
     if (!(view instanceof YouTubeLearningView)) {
-      new Notice("Could not open the YouTube learning player.");
+      new Notice("Could not open the YouTube video.");
       return;
     }
     await view.loadVideo(videoId, startSeconds);

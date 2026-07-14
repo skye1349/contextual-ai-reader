@@ -4,6 +4,31 @@
 
 Contextual AI Reader ist ein Obsidian-Desktop-Plugin zum unterstützten Lesen: Übersetzung, kontextbezogene Worterklärungen, Vorlesen, Exzerpte, auswählbare PDFs und Übersetzung von Markdown-Dateien.
 
+## Systemanforderungen und Installation
+
+Verwende Obsidian Desktop unter macOS, Windows oder Linux. Mobil können synchronisierte Notizen gelesen werden, lokale CLI- und Videowerkzeuge laufen dort jedoch nicht. Community Plugins benötigt weder Node.js noch npm oder das Quellcode-Repository. Wähle ein KI-Backend:
+
+- Codex: Installiere [Codex App oder CLI](https://developers.openai.com/codex/cli) und führe für die CLI `codex login` aus.
+- Claude Code: Installiere Claude Code und melde dich an.
+- API: Hinterlege einen OpenAI- oder Anthropic-API-Key; eine lokale CLI ist nicht erforderlich.
+
+Geschützte YouTube-Untertitel, saubere Video-Einzelbilder und Transkription ohne CC benötigen zusätzliche Werkzeuge.
+
+| System | `yt-dlp` und `ffmpeg` installieren |
+| --- | --- |
+| macOS | `brew install yt-dlp ffmpeg` |
+| Windows | `winget install yt-dlp.yt-dlp` und `winget install Gyan.FFmpeg` |
+| Ubuntu/Debian | `sudo apt update && sudo apt install yt-dlp ffmpeg` |
+| Anderes Linux | Paketmanager der Distribution verwenden |
+
+Starte Obsidian danach neu. Falls die automatische Erkennung fehlschlägt, trage den vollständigen Pfad zur ausführbaren Datei in den Einstellungen ein. Transkription ohne CC benötigt zusätzlich einen Groq- oder OpenAI-API-Key.
+
+## Lokale Daten und Cache
+
+Einstellungen, API-Keys, Vokabelcache, YouTube-Untertitel und Übersetzungen werden pro Vault in `<vault>/.obsidian/plugins/contextual-ai-reader/data.json` gespeichert. Lösche `data.json`, den Plugin-Ordner oder die Plugin-Daten nicht, wenn der Cache erhalten bleiben soll. Kopiere die Datei beim Wechsel des Vaults privat.
+
+Der Cache behält die 30 zuletzt verwendeten Videos. Screenshots und erzeugte Transkript-Notizen sind normale Vault-Dateien und werden beim Leeren des Caches nicht gelöscht. `data.json` kann API-Keys enthalten und darf nicht veröffentlicht, geteilt oder in Git eingecheckt werden.
+
 ## Funktionen
 
 - Quellsprache wählen oder automatisch erkennen lassen.
@@ -46,8 +71,8 @@ Wähle `AI backend` in den Einstellungen.
 
 Verfügbare Befehle:
 
-- `Translate current Markdown file: append target language below`
-- `Translate current Markdown file: interleave target-language paragraphs`
+- `Translate current Markdown file and append translation`
+- `Translate current Markdown file with interleaved translation`
 
 Batch-Pfade sind relativ zum Vault, nicht absolute Dateisystempfade.
 

@@ -8,6 +8,37 @@ It supports configurable language direction: choose the language you are reading
 
 The plugin can use local AI assistant CLIs such as Codex and Claude Code, or direct API-token backends such as OpenAI and Anthropic.
 
+## System Requirements
+
+Use the desktop version of Obsidian on macOS, Windows, or Linux. Mobile Obsidian can read synchronized notes and generated files, but it cannot run the local CLI/video-tool workflows. Marketplace users do **not** need Node.js, npm, or this source repository. Install the plugin from Obsidian Community Plugins, then choose one AI backend:
+
+- **Codex subscription/local login:** install the [Codex app or CLI](https://developers.openai.com/codex/cli), run `codex login` when using the CLI, and leave `Codex command` empty for auto-detection or enter its full path.
+- **Claude Code local login:** install and sign in to Claude Code, then leave `Claude command` empty or enter its full path.
+- **API mode:** choose OpenAI or Anthropic and enter the corresponding API key. No local AI CLI is required.
+
+Basic Markdown/PDF selection, quick translation, text-to-speech, excerpts, and API-backed AI do not require YouTube tools. For protected YouTube captions, clean frame capture, or no-CC transcription, install both `yt-dlp` and `ffmpeg`:
+
+| System | Install video tools | Executables detected by default |
+| --- | --- | --- |
+| macOS | `brew install yt-dlp ffmpeg` | `/opt/homebrew/bin`, `/usr/local/bin`, or PATH |
+| Windows | `winget install yt-dlp.yt-dlp` and `winget install Gyan.FFmpeg` | `yt-dlp.exe` / `ffmpeg.exe` in PATH, including Scoop shims |
+| Ubuntu/Debian | `sudo apt update && sudo apt install yt-dlp ffmpeg` | `/usr/bin` or PATH |
+| Other Linux | Install `yt-dlp` and `ffmpeg` with the distribution package manager | `/usr/local/bin`, `~/.local/bin`, or PATH |
+
+Restart Obsidian after installing command-line tools. If auto-detection fails, enter the complete executable path in plugin settings. No-CC speech-to-text additionally needs a Groq or OpenAI API key.
+
+## Local Data And Cache
+
+Settings, API keys, vocabulary cache, YouTube transcripts, and YouTube translations are stored per vault in:
+
+```text
+<your-vault>/.obsidian/plugins/contextual-ai-reader/data.json
+```
+
+Do not delete `data.json`, delete the plugin folder, reset plugin data, or replace the vault without copying this file if you want to keep the cache. Each vault has a separate cache. The YouTube cache retains the 30 most recently used videos; an exact transcript/language/prompt match avoids another AI request. Screenshot PNGs and generated transcript notes are ordinary vault files in their configured folders and are not deleted when the cache is cleared.
+
+`data.json` may contain API keys. Back it up privately and do not commit, publish, or share it. If `.obsidian` is synchronized to other devices, protect the synced vault accordingly.
+
 ## Features
 
 - Translate selected text into your configured target language.
@@ -122,17 +153,17 @@ This is different from normal translation: it focuses on the meaning in context.
 
 You can also use commands from the command palette:
 
-- `Translate selection to target language`: replaces the selected text with the target-language translation.
-- `Append target-language translation below selection`: keeps the original selection and inserts the translation below it.
-- `Speak selected text`: reads the selected text aloud.
-- `Save selection to excerpts`: saves the selected text to your excerpt note with source information.
+- `Translate selected text`: replaces the selected text with its translation.
+- `Insert translation below selected text`: keeps the original selection and inserts the translation below it.
+- `Read selected text aloud`: reads the selected text aloud.
+- `Save selected text to excerpt note`: saves the selected text with source information.
 
 ### Current Markdown File Translation
 
 Open a Markdown file and run one of these commands:
 
-- `Translate current Markdown file: append target language below`
-- `Translate current Markdown file: interleave target-language paragraphs`
+- `Translate current Markdown file and append translation`
+- `Translate current Markdown file with interleaved translation`
 
 Append mode:
 
@@ -164,8 +195,8 @@ Use batch translation when you want to translate multiple Markdown files with on
 
 1. Open the command palette.
 2. Run one of the batch commands:
-   - `Batch translate Markdown files: append target language below`
-   - `Batch translate Markdown files: interleave target-language paragraphs`
+   - `Translate multiple Markdown files and append translations`
+   - `Translate multiple Markdown files with interleaved translations`
 3. Enter one Markdown file, folder, or wildcard per line.
 4. Click Start.
 
@@ -203,7 +234,7 @@ The folder mode recursively includes Markdown files inside the folder.
 
 ## Excerpts
 
-Set `Excerpt file` in plugin settings. When you click Book plus or run `Save selection to excerpts`, the plugin appends an entry to that note.
+Set `Excerpt file` in plugin settings. When you click Book plus or run `Save selected text to excerpt note`, the plugin appends an entry to that note.
 
 Excerpt entries can include the original text, popup translation, vocabulary note, source note path, and line references when available.
 
@@ -222,13 +253,13 @@ Vocabulary entries stay in the same main excerpt file, but each vocabulary card 
 
 This keeps the notebook simple while still allowing Obsidian search, tags, and Dataview-style filtering by language, status, source note, or topic.
 
-## YouTube Learning Player (Development Preview)
+## YouTube Videos and Interactive Transcripts
 
-![YouTube learning player with interactive bilingual transcript and generated note](https://raw.githubusercontent.com/skye1349/contextual-ai-reader/main/docs/images/youtube-learning-player.png)
+![YouTube video with interactive bilingual transcript and generated note](https://raw.githubusercontent.com/skye1349/contextual-ai-reader/main/docs/images/youtube-learning-player.png)
 
 ### Open and navigate a video
 
-1. Run `Open YouTube learning player` from the command palette.
+1. Run `Open YouTube video` from the command palette.
 2. Paste a `youtube.com` or `youtu.be` link.
 3. The video opens in its own named Obsidian tab. A different video receives its own video-title tab.
 4. The transcript follows playback and highlights the active sentence. Click a sentence or timestamp to seek the existing player.
@@ -286,29 +317,6 @@ This plugin is not offline translation.
 Depending on your selected backend, selected text and Markdown content may be sent to local Codex CLI/App, local Claude Code, OpenAI API, or Anthropic API. Settings are stored locally in Obsidian. API keys in plugin settings are sensitive and should not be committed to a public repository.
 
 Full-file and batch translation commands modify Markdown files directly. Back up important vaults before running bulk operations.
-
-## Development
-
-```bash
-npm install
-npm run build
-```
-
-The plugin folder must contain `manifest.json`, `main.js`, and `styles.css`.
-
-To build a local plugin that can coexist with the Marketplace version in a separate test vault:
-
-```bash
-npm run build:dev-plugin
-```
-
-Install the generated `dist-dev/contextual-ai-reader-dev` folder under the test vault's `.obsidian/plugins/` directory. It uses the separate plugin ID `contextual-ai-reader-dev` and the display name `Contextual AI Reader Dev`. This does not change the release version or create a tag.
-
-Or build and install it into a test vault in one command:
-
-```bash
-npm run install:dev-plugin -- "/absolute/path/to/Test Vault"
-```
 
 ## License
 
