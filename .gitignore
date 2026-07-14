@@ -17,6 +17,7 @@ sync-trading-zone-to-icloud.sh
 # Build/tooling noise
 .obsidian-cache/
 e2e-artifacts/
+dist-dev/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

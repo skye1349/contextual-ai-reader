@@ -248,6 +248,223 @@
   min-height: 1.6em;
 }
 
+/* YouTube learning player */
+.contextual-ai-reader-youtube-view {
+  container-type: inline-size;
+}
+
+.contextual-ai-reader-youtube-view .view-content {
+  padding: 0;
+  overflow: hidden;
+}
+
+.youtube-reader-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(320px, 0.75fr);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: var(--background-primary);
+}
+
+.youtube-reader-main {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-right: 1px solid var(--background-modifier-border);
+}
+
+.youtube-reader-toolbar {
+  display: flex;
+  align-items: center;
+  flex: 0 0 44px;
+  gap: 4px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+}
+
+.youtube-reader-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.youtube-reader-tool {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+}
+
+.youtube-reader-player {
+  position: relative;
+  min-width: 0;
+  min-height: 240px;
+  flex: 1 1 auto;
+  background: #000;
+}
+
+.youtube-reader-player iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.youtube-reader-status {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 8px 12px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.youtube-reader-status.is-error {
+  color: var(--text-error);
+}
+
+.youtube-reader-transcript-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--background-primary-alt);
+}
+
+.youtube-reader-transcript-header {
+  display: flex;
+  align-items: center;
+  flex: 0 0 44px;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  color: var(--text-normal);
+  font-size: 13px;
+}
+
+.youtube-reader-transcript-header span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.youtube-reader-transcript {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 8px 0 40px;
+  scroll-behavior: smooth;
+}
+
+.youtube-reader-segment {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 14px;
+  border-left: 3px solid transparent;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.youtube-reader-segment:hover {
+  background: var(--background-modifier-hover);
+}
+
+.youtube-reader-segment.is-active {
+  border-left-color: var(--interactive-accent);
+  background: var(--background-modifier-active-hover);
+}
+
+.youtube-reader-time {
+  align-self: start;
+  min-width: 0;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-accent);
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  text-align: left;
+}
+
+.youtube-reader-time:hover {
+  background: transparent;
+  color: var(--text-accent-hover);
+}
+
+.youtube-reader-segment-content {
+  min-width: 0;
+  cursor: pointer;
+}
+
+.youtube-reader-original,
+.youtube-reader-translation {
+  overflow-wrap: anywhere;
+  letter-spacing: 0;
+  line-height: 1.55;
+}
+
+.youtube-reader-original {
+  color: var(--text-normal);
+  font-size: 14px;
+}
+
+.youtube-reader-translation {
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.youtube-reader-segment.is-active .youtube-reader-original {
+  color: var(--text-accent);
+}
+
+.youtube-reader-empty,
+.youtube-reader-transcript-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  height: 100%;
+  padding: 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.youtube-reader-empty h3 {
+  margin: 0 0 8px;
+  color: var(--text-normal);
+  font-size: 18px;
+}
+
+.youtube-reader-empty p {
+  max-width: 440px;
+  margin: 0;
+}
+
+@container (max-width: 720px) {
+  .youtube-reader-shell {
+    grid-template-rows: minmax(280px, 56%) minmax(220px, 44%);
+    grid-template-columns: 1fr;
+  }
+
+  .youtube-reader-main {
+    border-right: 0;
+    border-bottom: 1px solid var(--background-modifier-border);
+  }
+}
+
 /* Stop button (popup + overlay) */
 .contextual-ai-reader-stop-btn,
 .ai-reader-overlay-stop {

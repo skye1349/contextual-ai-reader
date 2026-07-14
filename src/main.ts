@@ -15,9 +15,23 @@ import {
   Setting,
   TFile,
   TFolder,
+  WorkspaceLeaf,
   normalizePath,
   setIcon
 } from "obsidian";
+import {
+  YOUTUBE_VIEW_TYPE,
+  YouTubeLearningView,
+  YouTubeSegment,
+  YouTubeUrlModal,
+  YouTubeVideoData,
+  buildYouTubeTimestampUri,
+  formatTimestamp,
+  normalizeYouTubeFolder,
+  parseYouTubeVideoId,
+  parseYouTubeJson3,
+  sanitizeFileName
+} from "./youtube";
 
 type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
 type InsertMode = "replace" | "append";
@@ -53,6 +67,10 @@ interface ContextualAIReaderSettings {
   targetLanguage: string;
   timeoutSeconds: number;
   vocabularyCache: Record<string, VocabularyCacheEntry>;
+  youtubeAutoTranslate: boolean;
+  youtubeScreenshotFolder: string;
+  youtubeTranscriptFolder: string;
+  youtubeYtDlpCommand: string;
 }
 
 const DEFAULT_SETTINGS: ContextualAIReaderSettings = {
@@ -83,7 +101,11 @@ const DEFAULT_SETTINGS: ContextualAIReaderSettings = {
   sourceLanguage: "auto",
   targetLanguage: "zh-CN",
   timeoutSeconds: 90,
-  vocabularyCache: {}
+  vocabularyCache: {},
+  youtubeAutoTranslate: true,
+  youtubeScreenshotFolder: "Contextual AI Reader/YouTube Screenshots",
+  youtubeTranscriptFolder: "Contextual AI Reader/YouTube Transcripts",
+  youtubeYtDlpCommand: ""
 };
 
 const LANGUAGE_OPTIONS: Array<{ code: string; label: string; promptName: string }> = [
@@ -191,6 +213,21 @@ function buildClaudeCandidates(): string[] {
 }
 
 const CLAUDE_CANDIDATES = buildClaudeCandidates();
+
+function buildYtDlpCandidates(): string[] {
+  const home = getHomeDir();
+  const appData = getAppDataDir();
+  return process.platform === "win32"
+    ? [
+      join(appData, "Python", "Scripts", "yt-dlp.exe"),
+      join(home, "scoop", "shims", "yt-dlp.exe"),
+      "yt-dlp.exe",
+      "yt-dlp"
+    ]
+    : ["/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp", `${home}/.local/bin/yt-dlp`, "yt-dlp"];
+}
+
+const YT_DLP_CANDIDATES = buildYtDlpCandidates();
 
 interface SourceReference {
   endLine?: number;
@@ -317,6 +354,17 @@ interface VocabularyCard {
   word: string;
 }
 
+interface YtDlpCaptionFormat {
+  ext?: string;
+  url?: string;
+}
+
+interface YtDlpMetadata {
+  automatic_captions?: Record<string, YtDlpCaptionFormat[]>;
+  subtitles?: Record<string, YtDlpCaptionFormat[]>;
+  title?: string;
+}
+
 export default class ContextualAIReaderPlugin extends Plugin {
   settings: ContextualAIReaderSettings = DEFAULT_SETTINGS;
   private autoTimer?: number;
@@ -332,9 +380,20 @@ export default class ContextualAIReaderPlugin extends Plugin {
   private requestSerial = 0;
   private statusBarEl?: HTMLElement;
   private translationCache = new Map<string, string>();
+  private lastMarkdownLeaf?: WorkspaceLeaf;
 
   async onload() {
     await this.loadSettings();
+
+    this.registerView(YOUTUBE_VIEW_TYPE, (leaf) => new YouTubeLearningView(leaf, {
+      autoTranslate: () => this.settings.youtubeAutoTranslate,
+      captureVideoFrame: (view) => this.captureYouTubeFrame(view),
+      createTranscriptNote: (data) => this.createYouTubeTranscriptNote(data),
+      fetchTranscriptFallback: (videoId, language) => this.fetchYouTubeWithYtDlp(videoId, language),
+      sourceLanguage: () => this.settings.sourceLanguage,
+      stopTranslation: () => this.stopCurrentTranslation(),
+      translateSegments: (segments, onProgress) => this.translateYouTubeSegments(segments, onProgress)
+    }));
 
     this.statusBarEl = this.addStatusBarItem();
     this.setStatus("");
@@ -410,6 +469,55 @@ export default class ContextualAIReaderPlugin extends Plugin {
         void this.saveExcerpt(editor.getSelection());
       }
     });
+
+    this.addCommand({
+      id: "open-youtube-learning-player",
+      name: "Open YouTube learning player",
+      callback: () => {
+        new YouTubeUrlModal(this.app, (url) => { void this.openYouTubePlayer(url); }).open();
+      }
+    });
+
+    this.addCommand({
+      id: "capture-youtube-frame-to-note",
+      name: "Capture current YouTube frame to note",
+      callback: () => {
+        const view = this.getYouTubeView();
+        if (!view) {
+          new Notice("Open the YouTube learning player first.");
+          return;
+        }
+        void this.captureYouTubeFrame(view);
+      }
+    });
+
+    this.addCommand({
+      id: "create-youtube-transcript-note",
+      name: "Create note from current YouTube transcript",
+      callback: () => {
+        const data = this.getYouTubeView()?.getVideoData();
+        if (!data) {
+          new Notice("Load a YouTube video first.");
+          return;
+        }
+        void this.createYouTubeTranscriptNote(data);
+      }
+    });
+
+    this.registerObsidianProtocolHandler("contextual-ai-reader-youtube", (params) => {
+      const video = params.video;
+      if (!video) return;
+      const seconds = Number(params.t ?? 0);
+      void this.openYouTubePlayer(video, Number.isFinite(seconds) ? seconds : 0);
+    });
+
+    this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => {
+      if (leaf?.view instanceof MarkdownView) this.lastMarkdownLeaf = leaf;
+    }));
+
+    const initialMarkdown = this.app.workspace.getLeavesOfType("markdown")
+      .find((leaf) => leaf.view instanceof MarkdownView);
+    if (initialMarkdown) this.lastMarkdownLeaf = initialMarkdown;
 
     this.addSettingTab(new ContextualAIReaderSettingTab(this.app, this));
 
@@ -1032,6 +1140,264 @@ export default class ContextualAIReaderPlugin extends Plugin {
       new Notice(`Could not save excerpt: ${getErrorMessage(error)}`);
       console.error("Could not save excerpt", error);
     }
+  }
+
+  private getYouTubeView(): YouTubeLearningView | undefined {
+    const active = this.app.workspace.getActiveViewOfType(YouTubeLearningView);
+    if (active) return active;
+    return this.app.workspace.getLeavesOfType(YOUTUBE_VIEW_TYPE)
+      .map((leaf) => leaf.view)
+      .find((view): view is YouTubeLearningView => view instanceof YouTubeLearningView);
+  }
+
+  private async openYouTubePlayer(urlOrId: string, startSeconds = 0) {
+    const videoId = parseYouTubeVideoId(urlOrId);
+    if (!videoId) {
+      new Notice("Enter a valid YouTube link.");
+      return;
+    }
+
+    const existing = this.app.workspace.getLeavesOfType(YOUTUBE_VIEW_TYPE)
+      .map((leaf) => leaf.view)
+      .find((view): view is YouTubeLearningView =>
+        view instanceof YouTubeLearningView && view.getVideoData()?.videoId === videoId
+      );
+
+    if (existing) {
+      this.app.workspace.revealLeaf(existing.leaf);
+      existing.seekTo(startSeconds);
+      return;
+    }
+
+    const workspaceLeaves: WorkspaceLeaf[] = [];
+    this.app.workspace.iterateAllLeaves((candidate) => workspaceLeaves.push(candidate));
+    const anchorLeaf = workspaceLeaves
+      .sort((left, right) => right.view.containerEl.clientWidth - left.view.containerEl.clientWidth)[0]
+      ?? this.lastMarkdownLeaf;
+    if (anchorLeaf) {
+      this.app.workspace.setActiveLeaf(anchorLeaf, { focus: true });
+    }
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.setViewState({ type: YOUTUBE_VIEW_TYPE, active: true });
+    const view = leaf.view;
+    if (!(view instanceof YouTubeLearningView)) {
+      new Notice("Could not open the YouTube learning player.");
+      return;
+    }
+    await view.loadVideo(videoId, startSeconds);
+    this.app.workspace.revealLeaf(leaf);
+  }
+
+  private async translateYouTubeSegments(
+    segments: YouTubeSegment[],
+    onProgress: (completed: number, total: number) => void
+  ): Promise<string[]> {
+    if (!this.beginOverlayOperation()) {
+      throw new Error("Another full-document or transcript translation is already running.");
+    }
+    this.startOperation();
+    const batchSize = 24;
+    const translations: string[] = [];
+
+    try {
+      for (let start = 0; start < segments.length; start += batchSize) {
+        if (this.isCancelled) throw new Error("Translation stopped.");
+        const batch = segments.slice(start, start + batchSize);
+        const translated = await this.translateYouTubeBatch(batch);
+        translations.push(...translated);
+        onProgress(Math.min(start + batch.length, segments.length), segments.length);
+      }
+
+      new Notice(`YouTube transcript translation complete.${this.tokenUsageSuffix()}`, 9000);
+      return translations;
+    } finally {
+      this.finishOverlayOperation();
+    }
+  }
+
+  private async fetchYouTubeWithYtDlp(videoId: string, preferredLanguage: string): Promise<YouTubeVideoData> {
+    const command = resolveYtDlpCommand(this.settings.youtubeYtDlpCommand);
+    const handle = spawnProcess(
+      command,
+      [
+        "--no-update",
+        "--no-playlist",
+        "--skip-download",
+        "--dump-single-json",
+        `https://www.youtube.com/watch?v=${videoId}`
+      ],
+      "",
+      this.settings.timeoutSeconds * 1000
+    );
+
+    let result: ProcessResult;
+    try {
+      result = await handle.promise;
+    } catch (error) {
+      throw new Error(`yt-dlp is required for this video's protected subtitle URLs. Configure it in plugin settings. ${getErrorMessage(error)}`);
+    }
+    if (result.code !== 0) throw new Error(compactProcessError(result.stderr || result.stdout));
+
+    let metadata: YtDlpMetadata;
+    try {
+      metadata = JSON.parse(result.stdout) as YtDlpMetadata;
+    } catch {
+      throw new Error("yt-dlp returned invalid video metadata.");
+    }
+
+    const track = chooseYtDlpCaption(metadata, preferredLanguage);
+    const format = track?.formats.find((candidate) => candidate.ext === "json3" && candidate.url)
+      ?? track?.formats.find((candidate) => candidate.url);
+    if (!format?.url) throw new Error("No accessible subtitle track was found by yt-dlp.");
+
+    const response = await requestUrl({ url: format.url, throw: false });
+    if (response.status < 200 || response.status >= 300 || !response.text.trim()) {
+      throw new Error(`yt-dlp subtitle URL returned HTTP ${response.status} with no usable data.`);
+    }
+    if (format.ext && format.ext !== "json3") {
+      throw new Error(`yt-dlp did not provide JSON3 captions (received ${format.ext}).`);
+    }
+
+    return {
+      title: metadata.title?.trim() || `YouTube ${videoId}`,
+      videoId,
+      segments: parseYouTubeJson3(response.text)
+    };
+  }
+
+  private async translateYouTubeBatch(segments: YouTubeSegment[]): Promise<string[]> {
+    const target = getLanguagePromptName(this.settings.targetLanguage);
+    const source = getLanguagePromptName(this.settings.sourceLanguage);
+    const transcript = segments.map((segment, index) => ({
+      id: index,
+      start: Math.round(segment.start * 10) / 10,
+      text: segment.text
+    }));
+    const prompt = [
+      `Translate this continuous YouTube transcript from ${source} into ${target}.`,
+      "Use the neighboring subtitle sentences as context so pronouns, terminology, tone, and unfinished clauses remain coherent.",
+      "Return only one valid JSON array of translated strings in the same order and with exactly the same number of items.",
+      "Do not include timestamps, IDs, Markdown, commentary, or code fences.",
+      this.settings.customPrompt.trim() ? `Additional context: ${this.settings.customPrompt.trim()}` : "",
+      JSON.stringify(transcript)
+    ].filter(Boolean).join("\n\n");
+
+    const raw = await this.runAIPrompt(prompt);
+    try {
+      return parseStringArray(raw, segments.length);
+    } catch (error) {
+      if (segments.length === 1) {
+        return [(await this.runAITranslation(segments[0].text)).trim()];
+      }
+      console.warn("YouTube transcript batch returned invalid JSON; retrying smaller batches.", error);
+      const midpoint = Math.ceil(segments.length / 2);
+      const left = await this.translateYouTubeBatch(segments.slice(0, midpoint));
+      const right = await this.translateYouTubeBatch(segments.slice(midpoint));
+      return [...left, ...right];
+    }
+  }
+
+  private async captureYouTubeFrame(view: YouTubeLearningView) {
+    const bounds = view.getVideoBounds();
+    const data = view.getVideoData();
+    if (!bounds || !data) {
+      new Notice("The YouTube player is not ready yet.");
+      return;
+    }
+
+    const electronWindow = getElectronWindow();
+    if (!electronWindow) {
+      new Notice("Video frame capture is available in the Obsidian desktop app only.");
+      return;
+    }
+
+    try {
+      const image = await electronWindow.webContents.capturePage({
+        x: Math.max(0, Math.round(bounds.left)),
+        y: Math.max(0, Math.round(bounds.top)),
+        width: Math.max(1, Math.round(bounds.width)),
+        height: Math.max(1, Math.round(bounds.height))
+      });
+      const png = image.toPNG();
+      const folder = normalizeYouTubeFolder(
+        this.settings.youtubeScreenshotFolder,
+        DEFAULT_SETTINGS.youtubeScreenshotFolder
+      );
+      await this.ensureParentFolders(`${folder}/placeholder.png`);
+      const stamp = formatFileTimestamp(new Date());
+      const fileName = `${sanitizeFileName(data.title)} ${formatTimestamp(view.getCurrentTime()).replace(/:/g, "-")} ${stamp}.png`;
+      const path = await this.getAvailableVaultPath(`${folder}/${fileName}`);
+      const buffer = png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength) as ArrayBuffer;
+      await this.app.vault.createBinary(path, buffer);
+
+      const timestamp = formatTimestamp(view.getCurrentTime());
+      const uri = buildYouTubeTimestampUri(data.videoId, view.getCurrentTime());
+      await this.insertIntoLastMarkdown(`\n\n[${timestamp}](${uri})\n\n![[${path}]]\n`);
+      new Notice(`Captured the video frame to ${path}.`);
+    } catch (error) {
+      new Notice(`Could not capture the video frame: ${getErrorMessage(error)}`);
+      console.error("Could not capture YouTube frame", error);
+    }
+  }
+
+  private async createYouTubeTranscriptNote(data: YouTubeVideoData) {
+    try {
+      const folder = normalizeYouTubeFolder(
+        this.settings.youtubeTranscriptFolder,
+        DEFAULT_SETTINGS.youtubeTranscriptFolder
+      );
+      await this.ensureParentFolders(`${folder}/placeholder.md`);
+      const path = await this.getAvailableVaultPath(`${folder}/${sanitizeFileName(data.title)} Transcript.md`);
+      const lines = [
+        "---",
+        "type: youtube-transcript",
+        `video_id: ${data.videoId}`,
+        `source_language: ${this.settings.sourceLanguage}`,
+        `target_language: ${this.settings.targetLanguage}`,
+        "---",
+        "",
+        `# ${data.title}`,
+        "",
+        `Source: https://www.youtube.com/watch?v=${data.videoId}`,
+        "",
+        "## Transcript",
+        ""
+      ];
+
+      for (const segment of data.segments) {
+        const timestamp = formatTimestamp(segment.start);
+        lines.push(`### [${timestamp}](${buildYouTubeTimestampUri(data.videoId, segment.start)})`);
+        lines.push("", segment.text);
+        if (segment.translation) lines.push("", segment.translation);
+        lines.push("");
+      }
+
+      const file = await this.app.vault.create(path, `${lines.join("\n").trimEnd()}\n`);
+      const leaf = this.app.workspace.getLeaf("split", "vertical");
+      await leaf.openFile(file, { active: true });
+      this.lastMarkdownLeaf = leaf;
+      new Notice(`Created transcript note: ${path}`);
+    } catch (error) {
+      new Notice(`Could not create transcript note: ${getErrorMessage(error)}`);
+      console.error("Could not create YouTube transcript note", error);
+    }
+  }
+
+  private async insertIntoLastMarkdown(markdown: string) {
+    const active = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const view = active
+      ?? (this.lastMarkdownLeaf?.view instanceof MarkdownView ? this.lastMarkdownLeaf.view : undefined)
+      ?? this.app.workspace.getLeavesOfType("markdown")
+        .map((leaf) => leaf.view)
+        .find((candidate): candidate is MarkdownView => candidate instanceof MarkdownView);
+
+    if (!view) {
+      throw new Error("Open a Markdown note before capturing a frame.");
+    }
+
+    const cursor = view.editor.getCursor();
+    view.editor.replaceRange(markdown, cursor);
+    await view.requestSave();
   }
 
   private async runAITranslation(sourceText: string, onChunk?: (text: string) => void): Promise<string> {
@@ -2321,6 +2687,57 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Automatically translate YouTube transcripts")
+      .setDesc("After captions load, translate complete subtitle sentences in contextual AI batches and show them beside the video.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.youtubeAutoTranslate)
+          .onChange(async (value) => {
+            this.plugin.settings.youtubeAutoTranslate = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("YouTube screenshot folder")
+      .setDesc("Vault folder for captured video frames.")
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.youtubeScreenshotFolder)
+          .setValue(this.plugin.settings.youtubeScreenshotFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.youtubeScreenshotFolder = value.trim() || DEFAULT_SETTINGS.youtubeScreenshotFolder;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("YouTube transcript folder")
+      .setDesc("Vault folder for notes created from interactive transcripts.")
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.youtubeTranscriptFolder)
+          .setValue(this.plugin.settings.youtubeTranscriptFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.youtubeTranscriptFolder = value.trim() || DEFAULT_SETTINGS.youtubeTranscriptFolder;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("yt-dlp command")
+      .setDesc("Optional subtitle fallback for videos whose signed caption URL is protected. Leave empty to auto-detect yt-dlp.")
+      .addText((text) =>
+        text
+          .setPlaceholder(process.platform === "win32" ? "yt-dlp.exe" : "/opt/homebrew/bin/yt-dlp")
+          .setValue(this.plugin.settings.youtubeYtDlpCommand)
+          .onChange(async (value) => {
+            this.plugin.settings.youtubeYtDlpCommand = value.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
       .setName("Speech language")
       .setDesc("Language tag used by the system text-to-speech voice.")
       .addText((text) =>
@@ -3202,6 +3619,32 @@ function splitMarkdownBlocks(sourceText: string): MarkdownBlock[] {
   return blocks;
 }
 
+function chooseYtDlpCaption(
+  metadata: YtDlpMetadata,
+  preferredLanguage: string
+): { code: string; formats: YtDlpCaptionFormat[] } | undefined {
+  const preferred = preferredLanguage === "auto" ? "en" : preferredLanguage.toLowerCase();
+  const base = preferred.split("-")[0];
+  const sources = [metadata.subtitles ?? {}, metadata.automatic_captions ?? {}];
+
+  for (const source of sources) {
+    const keys = Object.keys(source);
+    const code = keys.find((key) => key.toLowerCase() === preferred)
+      ?? keys.find((key) => key.toLowerCase() === base)
+      ?? keys.find((key) => key.toLowerCase().startsWith(`${base}-`))
+      ?? keys.find((key) => key.toLowerCase() === "en")
+      ?? keys.find((key) => key.toLowerCase().startsWith("en-"))
+      ?? keys[0];
+    if (code && source[code]?.length) return { code, formats: source[code] };
+  }
+  return undefined;
+}
+
+function resolveYtDlpCommand(configuredCommand: string): string {
+  if (configuredCommand.trim()) return configuredCommand.trim();
+  return YT_DLP_CANDIDATES.find((candidate) => candidate === "yt-dlp" || existsSync(candidate)) ?? "yt-dlp";
+}
+
 function resolveCodexCommand(configuredCommand: string): string {
   if (configuredCommand) {
     return configuredCommand;
@@ -3475,6 +3918,40 @@ function formatTokenCount(value: number): string {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+interface ElectronNativeImageLike {
+  toPNG: () => Uint8Array;
+}
+
+interface ElectronWindowLike {
+  webContents: {
+    capturePage: (rect: { height: number; width: number; x: number; y: number }) => Promise<ElectronNativeImageLike>;
+  };
+}
+
+function getElectronWindow(): ElectronWindowLike | null {
+  const electron = (window as Window & {
+    electron?: { remote?: { getCurrentWindow?: () => ElectronWindowLike } };
+  }).electron;
+  return electron?.remote?.getCurrentWindow?.() ?? null;
+}
+
+function parseStringArray(raw: string, expectedLength: number): string[] {
+  const trimmed = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const start = trimmed.indexOf("[");
+  const end = trimmed.lastIndexOf("]");
+  if (start < 0 || end < start) throw new Error("AI response did not contain a JSON array.");
+  const parsed: unknown = JSON.parse(trimmed.slice(start, end + 1));
+  if (!Array.isArray(parsed) || parsed.length !== expectedLength || parsed.some((value) => typeof value !== "string")) {
+    throw new Error(`Expected ${expectedLength} translated subtitle strings.`);
+  }
+  return parsed as string[];
+}
+
+function formatFileTimestamp(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
 }
 
 function isStoppedError(error: unknown): boolean {

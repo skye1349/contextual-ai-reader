@@ -2,7 +2,7 @@
 
 [中文](https://github.com/skye1349/contextual-ai-reader/blob/main/README.zh-CN.md) · [日本語](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ja.md) · [한국어](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ko.md) · [Español](https://github.com/skye1349/contextual-ai-reader/blob/main/README.es.md) · [Français](https://github.com/skye1349/contextual-ai-reader/blob/main/README.fr.md) · [Deutsch](https://github.com/skye1349/contextual-ai-reader/blob/main/README.de.md)
 
-Contextual AI Reader is an Obsidian desktop reading companion for translation, contextual vocabulary, text-to-speech, excerpts, PDFs, and Markdown file translation.
+Contextual AI Reader is an Obsidian desktop reading companion for translation, contextual vocabulary, text-to-speech, excerpts, PDFs, Markdown, and language learning with YouTube transcripts.
 
 It supports configurable language direction: choose the language you are reading, or let the plugin auto-detect it, then choose the language you want to learn with. The default is auto-detect source language and Simplified Chinese as the target language.
 
@@ -23,6 +23,10 @@ The plugin can use local AI assistant CLIs such as Codex and Claude Code, or dir
 - Reduce token overhead on long chapters by merging consecutive short prose paragraphs into larger translation units.
 - Show token usage after AI calls when the selected backend reports usage.
 - Add custom reading context, terminology, and translation style instructions.
+- Open a YouTube link in an Obsidian learning-player tab with sentence-level interactive captions.
+- Translate captions in context, follow the current spoken sentence, and click any subtitle to seek the video.
+- Capture only the video frame into a Markdown note with a clickable timestamp back to the player.
+- Create a transcript note with source text, translations, and clickable timestamps.
 
 ## AI Backends
 
@@ -218,6 +222,18 @@ Vocabulary entries stay in the same main excerpt file, but each vocabulary card 
 
 This keeps the notebook simple while still allowing Obsidian search, tags, and Dataview-style filtering by language, status, source note, or topic.
 
+## YouTube Learning Player (Development Preview)
+
+Run `Open YouTube learning player` from the command palette and paste a `youtube.com` or `youtu.be` link. The plugin opens the video in an Obsidian tab and displays a sentence-level transcript beside it. Captions are merged into readable sentences instead of showing every tiny automatic-caption fragment.
+
+The transcript follows playback automatically. Click a sentence or its timestamp to seek the existing player to that moment. The toolbar provides play, pause, video-frame capture, transcript-note creation, contextual AI translation, stop, and open-on-YouTube controls.
+
+Screenshot capture writes only the visible player rectangle to the configured `YouTube screenshot folder`, then inserts the image and a clickable timestamp into the most recently used Markdown note. `Create note from current YouTube transcript` writes a reusable Markdown transcript to the configured `YouTube transcript folder`.
+
+The plugin first attempts caption extraction without an extra program. YouTube increasingly protects signed caption URLs, so some videos require [yt-dlp](https://github.com/yt-dlp/yt-dlp). Install it and leave `yt-dlp command` empty for auto-detection, or enter its full path in plugin settings. `yt-dlp` is used only to resolve metadata and subtitle URLs; this feature does not download the video.
+
+Some owners disable playback on other websites. The plugin cannot bypass that YouTube restriction; use the toolbar's external-link button for those videos. Captions and transcript notes may still be available.
+
 ## Token Usage And Cancellation
 
 AI-powered actions show token usage when the selected backend reports it.
@@ -246,6 +262,20 @@ npm run build
 ```
 
 The plugin folder must contain `manifest.json`, `main.js`, and `styles.css`.
+
+To build a local plugin that can coexist with the Marketplace version in a separate test vault:
+
+```bash
+npm run build:dev-plugin
+```
+
+Install the generated `dist-dev/contextual-ai-reader-dev` folder under the test vault's `.obsidian/plugins/` directory. It uses the separate plugin ID `contextual-ai-reader-dev` and the display name `Contextual AI Reader Dev`. This does not change the release version or create a tag.
+
+Or build and install it into a test vault in one command:
+
+```bash
+npm run install:dev-plugin -- "/absolute/path/to/Test Vault"
+```
 
 ## License
 

@@ -1,5 +1,5 @@
 import { browser, expect } from "@wdio/globals";
-import { mkdir } from "fs/promises";
+import { copyFile, mkdir } from "fs/promises";
 
 const PLUGIN_ID = "contextual-ai-reader";
 
@@ -104,5 +104,77 @@ describe("Contextual AI Reader in Obsidian", function () {
     expect(note).toContain("- target_language:: ja");
     expect(note).toContain("- source:: [[Books/Test Chapter.md]]");
     expect(note).toContain("- tags:: #vocabulary #language/ja #status/new");
+  });
+
+  (process.env.YOUTUBE_E2E ? it : it.skip)("opens a real YouTube learning player and extracts sentence-level captions", async function () {
+    const result = await browser.executeObsidian(async ({ app }) => {
+      const plugin = app.plugins.plugins["contextual-ai-reader"];
+      plugin.settings.youtubeAutoTranslate = false;
+      plugin.settings.sourceLanguage = "en";
+      await plugin.saveSettings();
+      await plugin.openYouTubePlayer("https://www.youtube.com/watch?v=UF8uR6Z6KLc");
+      const leaves = app.workspace.getLeavesOfType("contextual-ai-reader-youtube");
+      const view = leaves[0]?.view;
+      const data = view?.getVideoData();
+      view?.seekTo(42);
+      return {
+        title: data?.title,
+        segmentCount: data?.segments?.length ?? 0,
+        firstSegment: data?.segments?.[0]?.text ?? "",
+        leafCount: leaves.length,
+        viewType: view?.getViewType?.() ?? "missing",
+        visibleText: view?.containerEl?.innerText?.slice(0, 500) ?? "",
+        currentTime: view?.getCurrentTime() ?? -1
+      };
+    });
+
+    await browser.pause(3000);
+    await mkdir("e2e-artifacts", { recursive: true });
+    await browser.saveScreenshot("e2e-artifacts/youtube-learning-player.png");
+    const artifacts = await browser.executeObsidian(async ({ app }) => {
+      const plugin = app.plugins.plugins["contextual-ai-reader"];
+      const view = app.workspace.getLeavesOfType("contextual-ai-reader-youtube")[0]?.view;
+      const data = view?.getVideoData();
+      if (view && data) {
+        await plugin.captureYouTubeFrame(view);
+        await plugin.createYouTubeTranscriptNote(data);
+      }
+      const screenshot = app.vault.getFiles().find((file) => file.extension === "png");
+      const transcript = app.vault.getFiles().find((file) => file.path.endsWith("Transcript.md"));
+      const transcriptText = transcript ? await app.vault.read(transcript) : "";
+      const png = screenshot ? await app.vault.readBinary(screenshot) : new ArrayBuffer(0);
+      const viewData = png.byteLength >= 24 ? new DataView(png) : null;
+      const bounds = view?.getVideoBounds();
+      return {
+        screenshotBytes: png.byteLength,
+        screenshotWidth: viewData?.getUint32(16) ?? 0,
+        screenshotHeight: viewData?.getUint32(20) ?? 0,
+        screenshotPath: screenshot && typeof app.vault.adapter.getFullPath === "function"
+          ? app.vault.adapter.getFullPath(screenshot.path)
+          : "",
+        bounds: bounds ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height } : null,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        transcriptHasTimestamp: transcriptText.includes("obsidian://contextual-ai-reader-youtube?video=")
+      };
+    });
+    if (artifacts.screenshotPath) {
+      await copyFile(artifacts.screenshotPath, "e2e-artifacts/youtube-captured-frame.png");
+    }
+
+    if (result.leafCount !== 1 || !result.title) {
+      throw new Error(`YouTube view diagnostics: ${JSON.stringify(result)}`);
+    }
+    expect(result.title).toContain("Steve Jobs");
+    expect(result.segmentCount).toBeGreaterThan(10);
+    expect(result.firstSegment.length).toBeGreaterThan(0);
+    expect(result.currentTime).toBe(42);
+    expect(artifacts.screenshotBytes).toBeGreaterThan(300);
+    if (artifacts.screenshotWidth <= 300) {
+      throw new Error(`Screenshot diagnostics: ${JSON.stringify(artifacts)}`);
+    }
+    expect(artifacts.screenshotHeight).toBeGreaterThan(200);
+    expect(artifacts.transcriptHasTimestamp).toBe(true);
+    await expect(browser.$(".youtube-reader-player iframe")).toExist();
+    await expect(browser.$(".youtube-reader-segment")).toExist();
   });
 });
