@@ -4,6 +4,31 @@
 
 Contextual AI Reader est un plugin Obsidian desktop pour la lecture assistée : traduction, explication de vocabulaire en contexte, lecture vocale, notes d'extraits, PDF sélectionnables et traduction de fichiers Markdown.
 
+## Configuration requise et installation
+
+Utilisez Obsidian desktop sur macOS, Windows ou Linux. Sur mobile, les notes synchronisées restent lisibles, mais les outils CLI et vidéo locaux ne peuvent pas s'exécuter. Community Plugins ne nécessite ni Node.js, ni npm, ni le dépôt source. Choisissez un backend IA :
+
+- Codex : installez [Codex App ou CLI](https://developers.openai.com/codex/cli), puis exécutez `codex login` pour la CLI.
+- Claude Code : installez Claude Code et connectez-vous.
+- API : configurez une clé OpenAI ou Anthropic ; aucune CLI locale n'est requise.
+
+Les sous-titres YouTube protégés, la capture d'images vidéo propres et la transcription sans CC nécessitent des outils supplémentaires.
+
+| Système | Installer `yt-dlp` et `ffmpeg` |
+| --- | --- |
+| macOS | `brew install yt-dlp ffmpeg` |
+| Windows | `winget install yt-dlp.yt-dlp` et `winget install Gyan.FFmpeg` |
+| Ubuntu/Debian | `sudo apt update && sudo apt install yt-dlp ffmpeg` |
+| Autre Linux | Utilisez le gestionnaire de paquets de la distribution |
+
+Redémarrez Obsidian après l'installation. Si la détection automatique échoue, indiquez le chemin complet de l'exécutable dans les réglages. La transcription sans CC exige aussi une clé Groq ou OpenAI.
+
+## Données locales et cache
+
+Les réglages, clés API, cache de vocabulaire, sous-titres et traductions YouTube sont enregistrés pour chaque coffre dans `<vault>/.obsidian/plugins/contextual-ai-reader/data.json`. Pour conserver le cache, ne supprimez pas `data.json`, le dossier du plugin ou ses données. Copiez ce fichier de façon privée lors d'un changement de coffre.
+
+Le cache conserve les 30 vidéos les plus récentes. Les captures et notes de transcription sont des fichiers ordinaires du coffre et ne sont pas supprimées avec le cache. `data.json` peut contenir des clés API : ne le publiez pas, ne le partagez pas et ne l'ajoutez pas à Git.
+
 ## Fonctionnalités
 
 - Choisir la langue source ou utiliser la détection automatique.
@@ -46,8 +71,8 @@ Choisissez `AI backend` dans les paramètres.
 
 Commandes disponibles :
 
-- `Translate current Markdown file: append target language below`
-- `Translate current Markdown file: interleave target-language paragraphs`
+- `Translate current Markdown file and append translation`
+- `Translate current Markdown file with interleaved translation`
 
 Pour la traduction par lot, les chemins sont relatifs au vault.
 
