@@ -69,7 +69,6 @@ interface ContextualAIReaderSettings {
   timeoutSeconds: number;
   vocabularyCache: Record<string, VocabularyCacheEntry>;
   youtubeCache: Record<string, YouTubeCacheEntry>;
-  youtubeAutoTranslate: boolean;
   youtubeFfmpegCommand: string;
   youtubeGroqApiKey: string;
   youtubeScreenshotFolder: string;
@@ -109,7 +108,6 @@ const DEFAULT_SETTINGS: ContextualAIReaderSettings = {
   timeoutSeconds: 90,
   vocabularyCache: {},
   youtubeCache: {},
-  youtubeAutoTranslate: true,
   youtubeFfmpegCommand: "",
   youtubeGroqApiKey: "",
   youtubeScreenshotFolder: "Contextual AI Reader/YouTube Screenshots",
@@ -272,7 +270,12 @@ function isPrimaryModifierKey(event: KeyboardEvent): boolean {
 }
 
 function getLanguageOption(code: string): { code: string; label: string; promptName: string } {
-  return LANGUAGE_OPTIONS.find((option) => option.code === code) ?? LANGUAGE_OPTIONS[0];
+  const normalized = code.toLowerCase();
+  const base = normalized.split("-")[0];
+  return LANGUAGE_OPTIONS.find((option) => option.code.toLowerCase() === normalized)
+    ?? LANGUAGE_OPTIONS.find((option) => option.promptName.toLowerCase() === normalized)
+    ?? LANGUAGE_OPTIONS.find((option) => option.code.toLowerCase() === base)
+    ?? LANGUAGE_OPTIONS[0];
 }
 
 function getLanguagePromptName(code: string): string {
@@ -385,12 +388,15 @@ interface YtDlpCaptionFormat {
 
 interface YtDlpMetadata {
   automatic_captions?: Record<string, YtDlpCaptionFormat[]>;
+  language?: string;
   subtitles?: Record<string, YtDlpCaptionFormat[]>;
   title?: string;
 }
 
 interface YouTubeCacheEntry {
+  requestedSourceLanguage: string;
   segments: Array<{ duration: number; start: number; text: string }>;
+  sourceLanguage?: string;
   title: string;
   translations: Record<string, string[]>;
   updatedAt: number;
@@ -399,6 +405,7 @@ interface YouTubeCacheEntry {
 
 interface TranscriptionResult {
   duration?: number;
+  language?: string;
   segments?: Array<{ end?: number; start?: number; text?: string }>;
   text?: string;
 }
@@ -424,7 +431,6 @@ export default class ContextualAIReaderPlugin extends Plugin {
     await this.loadSettings();
 
     this.registerView(YOUTUBE_VIEW_TYPE, (leaf) => new YouTubeLearningView(leaf, {
-      autoTranslate: () => this.settings.youtubeAutoTranslate,
       captureVideoFrame: (view) => this.captureYouTubeFrame(view),
       createTranscriptNote: (data) => this.createYouTubeTranscriptNote(data),
       fetchTranscriptFallback: (videoId, language) => this.fetchYouTubeWithYtDlp(videoId, language),
@@ -1231,14 +1237,14 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
   private async translateYouTubeSegments(
     data: YouTubeVideoData,
-    onProgress: (completed: number, total: number) => void
+    onProgress: (completed: number, total: number, translations: readonly string[]) => void
   ): Promise<string[]> {
     const segments = data.segments;
     const cacheKey = this.getYouTubeTranslationCacheKey(data);
     const cached = this.settings.youtubeCache[data.videoId]?.translations[cacheKey] ?? [];
     const translations = cached.slice(0, segments.length);
     if (translations.length === segments.length) {
-      onProgress(segments.length, segments.length);
+      onProgress(segments.length, segments.length, translations);
       new Notice("Loaded the YouTube translation from local cache. Token usage: 0.");
       return translations;
     }
@@ -1248,16 +1254,16 @@ export default class ContextualAIReaderPlugin extends Plugin {
     }
     this.startOperation();
     const batchSize = 24;
-    onProgress(translations.length, segments.length);
+    onProgress(translations.length, segments.length, translations);
 
     try {
       for (let start = translations.length; start < segments.length; start += batchSize) {
         if (this.isCancelled) throw new Error("Translation stopped.");
         const batch = segments.slice(start, start + batchSize);
-        const translated = await this.translateYouTubeBatch(batch);
+        const translated = await this.translateYouTubeBatch(batch, data.sourceLanguage);
         translations.push(...translated);
         await this.cacheYouTubeTranslation(data, cacheKey, translations);
-        onProgress(Math.min(start + batch.length, segments.length), segments.length);
+        onProgress(Math.min(start + batch.length, segments.length), segments.length, translations);
       }
 
       new Notice(`YouTube transcript translation complete.${this.tokenUsageSuffix()}`, 9000);
@@ -1317,6 +1323,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
     const segments = parseYouTubeJson3(response.text);
     if (segments.length === 0) return await this.transcribeYouTubeAudio(videoId, title);
     return {
+      sourceLanguage: track?.code,
       title,
       videoId,
       segments
@@ -1325,8 +1332,9 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
   private async getCachedYouTubeVideo(videoId: string): Promise<YouTubeVideoData | undefined> {
     const entry = this.settings.youtubeCache[videoId];
-    if (!entry?.segments.length) return undefined;
+    if (!entry?.segments.length || entry.requestedSourceLanguage !== this.settings.sourceLanguage) return undefined;
     const data: YouTubeVideoData = {
+      sourceLanguage: entry.sourceLanguage,
       title: entry.title,
       videoId,
       segments: entry.segments.map((segment) => ({ ...segment }))
@@ -1345,7 +1353,9 @@ export default class ContextualAIReaderPlugin extends Plugin {
     const segments = data.segments.map(({ duration, start, text }) => ({ duration, start, text }));
     const sameTranscript = old && hashString(JSON.stringify(old.segments)) === hashString(JSON.stringify(segments));
     this.settings.youtubeCache[data.videoId] = {
+      requestedSourceLanguage: this.settings.sourceLanguage,
       segments,
+      sourceLanguage: data.sourceLanguage,
       title: data.title,
       translations: sameTranscript ? old.translations : {},
       updatedAt: Date.now(),
@@ -1371,7 +1381,8 @@ export default class ContextualAIReaderPlugin extends Plugin {
   private getYouTubeTranslationCacheKey(data: YouTubeVideoData): string {
     return hashString(JSON.stringify({
       customPrompt: this.settings.customPrompt.trim(),
-      sourceLanguage: this.settings.sourceLanguage,
+      requestedSourceLanguage: this.settings.sourceLanguage,
+      sourceLanguage: data.sourceLanguage,
       targetLanguage: this.settings.targetLanguage,
       transcript: data.segments.map(({ duration, start, text }) => [duration, start, text])
     }));
@@ -1416,12 +1427,14 @@ export default class ContextualAIReaderPlugin extends Plugin {
       const audioFiles = (await readdir(tempDir)).filter((name) => /^audio-\d+\.mp3$/.test(name)).sort();
       if (audioFiles.length === 0) throw new Error("ffmpeg produced no transcription audio chunks.");
       const segments: YouTubeSegment[] = [];
+      let detectedLanguage: string | undefined;
       for (let index = 0; index < audioFiles.length; index++) {
         new Notice(
           `Transcribing audio ${index + 1}/${audioFiles.length} with ${backend === "groq" ? "Groq Whisper" : "OpenAI Whisper"}…`,
           8000
         );
         const result = await this.requestYouTubeTranscription(await readFile(join(tempDir, audioFiles[index])), backend);
+        detectedLanguage ??= result.language;
         const offset = index * 1500;
         for (const segment of result.segments ?? []) {
           const text = segment.text?.trim();
@@ -1437,7 +1450,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
         }
       }
       if (segments.length === 0) throw new Error("Speech-to-text returned no timestamped segments.");
-      return { title, videoId, segments };
+      return { title, videoId, sourceLanguage: detectedLanguage, segments };
     } finally {
       await rm(tempDir, { force: true, recursive: true });
     }
@@ -1504,9 +1517,11 @@ export default class ContextualAIReaderPlugin extends Plugin {
     }
   }
 
-  private async translateYouTubeBatch(segments: YouTubeSegment[]): Promise<string[]> {
+  private async translateYouTubeBatch(segments: YouTubeSegment[], detectedSourceLanguage?: string): Promise<string[]> {
     const target = getLanguagePromptName(this.settings.targetLanguage);
-    const source = getLanguagePromptName(this.settings.sourceLanguage);
+    const source = this.settings.sourceLanguage === "auto" && detectedSourceLanguage
+      ? getLanguagePromptName(detectedSourceLanguage)
+      : getLanguagePromptName(this.settings.sourceLanguage);
     const transcript = segments.map((segment, index) => ({
       id: index,
       start: Math.round(segment.start * 10) / 10,
@@ -1530,8 +1545,8 @@ export default class ContextualAIReaderPlugin extends Plugin {
       }
       console.warn("YouTube transcript batch returned invalid JSON; retrying smaller batches.", error);
       const midpoint = Math.ceil(segments.length / 2);
-      const left = await this.translateYouTubeBatch(segments.slice(0, midpoint));
-      const right = await this.translateYouTubeBatch(segments.slice(midpoint));
+      const left = await this.translateYouTubeBatch(segments.slice(0, midpoint), detectedSourceLanguage);
+      const right = await this.translateYouTubeBatch(segments.slice(midpoint), detectedSourceLanguage);
       return [...left, ...right];
     }
   }
@@ -2939,18 +2954,6 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Automatically translate YouTube transcripts")
-      .setDesc("After captions load, translate complete subtitle sentences in contextual AI batches and show them beside the video.")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.youtubeAutoTranslate)
-          .onChange(async (value) => {
-            this.plugin.settings.youtubeAutoTranslate = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
       .setName("YouTube screenshot folder")
       .setDesc("Vault folder for captured video frames.")
       .addText((text) =>
@@ -3934,13 +3937,16 @@ function chooseYtDlpCaption(
   metadata: YtDlpMetadata,
   preferredLanguage: string
 ): { code: string; formats: YtDlpCaptionFormat[] } | undefined {
-  const preferred = preferredLanguage === "auto" ? "en" : preferredLanguage.toLowerCase();
+  const detected = metadata.language?.toLowerCase();
+  const preferred = (preferredLanguage === "auto" ? detected ?? "auto" : preferredLanguage).toLowerCase();
   const base = preferred.split("-")[0];
   const sources = [metadata.subtitles ?? {}, metadata.automatic_captions ?? {}];
 
   for (const source of sources) {
     const keys = Object.keys(source);
-    const code = keys.find((key) => key.toLowerCase() === preferred)
+    const code = preferredLanguage === "auto" && !detected
+      ? keys[0]
+      : keys.find((key) => key.toLowerCase() === preferred)
       ?? keys.find((key) => key.toLowerCase() === base)
       ?? keys.find((key) => key.toLowerCase().startsWith(`${base}-`))
       ?? keys.find((key) => key.toLowerCase() === "en")

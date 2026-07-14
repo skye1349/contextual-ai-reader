@@ -133,10 +133,28 @@ describe("Contextual AI Reader in Obsidian", function () {
     expect(result.changedLanguage).toBe("");
   });
 
+  it("uses the detected CC language and configured learning language in the YouTube prompt", async function () {
+    const prompt = await browser.executeObsidian(async ({ app }) => {
+      const plugin = app.plugins.plugins["contextual-ai-reader"];
+      plugin.settings.sourceLanguage = "auto";
+      plugin.settings.targetLanguage = "zh-CN";
+      const original = plugin.runAIPrompt;
+      let captured = "";
+      plugin.runAIPrompt = async (value) => {
+        captured = value;
+        return '["你好"]';
+      };
+      await plugin.translateYouTubeBatch([{ start: 0, duration: 2, text: "안녕하세요" }], "ko");
+      plugin.runAIPrompt = original;
+      return captured;
+    });
+
+    expect(prompt).toContain("from Korean into Simplified Chinese");
+  });
+
   (process.env.YOUTUBE_E2E ? it : it.skip)("opens a real YouTube learning player and extracts sentence-level captions", async function () {
     const result = await browser.executeObsidian(async ({ app }) => {
       const plugin = app.plugins.plugins["contextual-ai-reader"];
-      plugin.settings.youtubeAutoTranslate = false;
       plugin.settings.sourceLanguage = "en";
       await plugin.saveSettings();
       await plugin.openYouTubePlayer("https://www.youtube.com/watch?v=UF8uR6Z6KLc");
@@ -149,6 +167,8 @@ describe("Contextual AI Reader in Obsidian", function () {
         segmentCount: data?.segments?.length ?? 0,
         firstSegment: data?.segments?.[0]?.text ?? "",
         leafCount: leaves.length,
+        tabHeaderText: leaves[0]?.tabHeaderEl?.textContent ?? "",
+        tabTitle: leaves[0]?.getDisplayText?.() ?? "",
         viewType: view?.getViewType?.() ?? "missing",
         visibleText: view?.containerEl?.innerText?.slice(0, 500) ?? "",
         currentTime: view?.getCurrentTime() ?? -1
@@ -162,9 +182,28 @@ describe("Contextual AI Reader in Obsidian", function () {
       const plugin = app.plugins.plugins["contextual-ai-reader"];
       const view = app.workspace.getLeavesOfType("contextual-ai-reader-youtube")[0]?.view;
       const data = view?.getVideoData();
+      let incrementalTranslation = "";
+      let initialTranslationCount = 0;
+      let hiddenDisplay = "";
+      let restoredDisplay = "";
+      let closeStoppedTranslation = false;
       if (view && data) {
+        initialTranslationCount = view.containerEl.querySelectorAll(".youtube-reader-translation").length;
+        view.applyTranslations(["Incremental translation test"]);
+        const translation = view.containerEl.querySelector(".youtube-reader-translation");
+        incrementalTranslation = translation?.textContent ?? "";
+        const visibilityButton = view.containerEl.querySelector('[aria-label="Hide translated subtitles"]');
+        visibilityButton?.click();
+        hiddenDisplay = translation ? getComputedStyle(translation).display : "missing";
+        visibilityButton?.click();
+        restoredDisplay = translation ? getComputedStyle(translation).display : "missing";
         await plugin.captureYouTubeFrame(view);
         await plugin.createYouTubeTranscriptNote(data);
+        const originalStop = plugin.stopCurrentTranslation;
+        plugin.stopCurrentTranslation = () => { closeStoppedTranslation = true; };
+        view.translationRunning = true;
+        await view.onClose();
+        plugin.stopCurrentTranslation = originalStop;
       }
       const noticeText = Array.from(document.querySelectorAll(".notice"))
         .map((element) => element.textContent ?? "")
@@ -184,6 +223,11 @@ describe("Contextual AI Reader in Obsidian", function () {
           : "",
         bounds: bounds ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height } : null,
         viewport: { width: window.innerWidth, height: window.innerHeight },
+        incrementalTranslation,
+        initialTranslationCount,
+        hiddenDisplay,
+        restoredDisplay,
+        closeStoppedTranslation,
         noticeText,
         transcriptHasTimestamp: transcriptText.includes("obsidian://contextual-ai-reader-youtube?video=")
       };
@@ -196,6 +240,8 @@ describe("Contextual AI Reader in Obsidian", function () {
       throw new Error(`YouTube view diagnostics: ${JSON.stringify(result)}`);
     }
     expect(result.title).toContain("Steve Jobs");
+    expect(result.tabTitle).toContain("Steve Jobs");
+    expect(result.tabHeaderText).toContain("Steve Jobs");
     expect(result.segmentCount).toBeGreaterThan(10);
     expect(result.firstSegment.length).toBeGreaterThan(0);
     expect(result.currentTime).toBe(42);
@@ -204,8 +250,36 @@ describe("Contextual AI Reader in Obsidian", function () {
       throw new Error(`Screenshot diagnostics: ${JSON.stringify(artifacts)}`);
     }
     expect(artifacts.screenshotHeight).toBeGreaterThan(200);
+    expect(artifacts.incrementalTranslation).toBe("Incremental translation test");
+    expect(artifacts.initialTranslationCount).toBe(0);
+    expect(artifacts.hiddenDisplay).toBe("none");
+    expect(artifacts.restoredDisplay).not.toBe("none");
+    expect(artifacts.closeStoppedTranslation).toBe(true);
     expect(artifacts.transcriptHasTimestamp).toBe(true);
     await expect(browser.$(".youtube-reader-player iframe")).toExist();
     await expect(browser.$(".youtube-reader-segment")).toExist();
+  });
+
+  (process.env.YOUTUBE_E2E ? it : it.skip)("auto-detects the original Korean CC track instead of English", async function () {
+    const result = await browser.executeObsidian(async ({ app }) => {
+      const plugin = app.plugins.plugins["contextual-ai-reader"];
+      plugin.settings.sourceLanguage = "auto";
+      plugin.settings.targetLanguage = "zh-CN";
+      await plugin.saveSettings();
+      await plugin.openYouTubePlayer("https://www.youtube.com/watch?v=X3ZFj-37TO8");
+      const view = app.workspace.getLeavesOfType("contextual-ai-reader-youtube")
+        .map((leaf) => leaf.view)
+        .find((candidate) => candidate.getVideoData?.()?.videoId === "X3ZFj-37TO8");
+      const data = view?.getVideoData?.();
+      return {
+        sourceLanguage: data?.sourceLanguage ?? "",
+        sample: data?.segments?.slice(0, 8).map((segment) => segment.text).join(" ") ?? "",
+        translationCount: view?.containerEl?.querySelectorAll(".youtube-reader-translation").length ?? -1
+      };
+    });
+
+    expect(result.sourceLanguage).toBe("ko");
+    expect(result.sample).toMatch(/[가-힣]/);
+    expect(result.translationCount).toBe(0);
   });
 });

@@ -224,17 +224,46 @@ This keeps the notebook simple while still allowing Obsidian search, tags, and D
 
 ## YouTube Learning Player (Development Preview)
 
-Run `Open YouTube learning player` from the command palette and paste a `youtube.com` or `youtu.be` link. The plugin opens the video in an Obsidian tab and displays a sentence-level transcript beside it. Captions are merged into readable sentences instead of showing every tiny automatic-caption fragment.
+![YouTube learning player with interactive bilingual transcript and generated note](https://raw.githubusercontent.com/skye1349/contextual-ai-reader/main/docs/images/youtube-learning-player.png)
 
-The transcript follows playback automatically. Click a sentence or its timestamp to seek the existing player to that moment. The toolbar provides play, pause, video-frame capture, transcript-note creation, contextual AI translation, stop, and open-on-YouTube controls.
+### Open and navigate a video
 
-Screenshot capture uses `yt-dlp` and `ffmpeg` to extract the original video frame at the current playback time. YouTube titles, controls, progress bars, and subtitle overlays are therefore excluded. The clean PNG is saved to `YouTube screenshot folder`, then inserted into the most recently used Markdown note with a clickable timestamp. Set `YouTube screenshot display width` to control its displayed size without reducing the saved image resolution. `Create note from current YouTube transcript` writes a reusable Markdown transcript to the configured `YouTube transcript folder`.
+1. Run `Open YouTube learning player` from the command palette.
+2. Paste a `youtube.com` or `youtu.be` link.
+3. The video opens in its own named Obsidian tab. A different video receives its own video-title tab.
+4. The transcript follows playback and highlights the active sentence. Click a sentence or timestamp to seek the existing player.
 
-The plugin first attempts caption extraction without an extra program. YouTube increasingly protects signed caption URLs, so some videos require [yt-dlp](https://github.com/yt-dlp/yt-dlp). Clean screenshots and no-caption transcription also require [ffmpeg](https://ffmpeg.org/). Leave both command fields empty for auto-detection, or enter their full paths in plugin settings.
+Opening a video never starts AI translation. Click the Languages button when you want it. Each completed batch is displayed immediately below its matching source sentences. Closing that video tab or clicking Stop cancels the remaining batches and terminates an active local Codex/Claude process. Completed batches remain cached.
 
-If a video has no manual or automatic CC track, `No-caption transcription` can download its audio temporarily and send compressed audio to Groq Whisper or OpenAI Whisper for timestamped speech-to-text. Configure a Groq key or the existing OpenAI key; choose `Disabled` if you never want this fallback. Temporary audio is deleted after transcription.
+Use the eye button to hide or show translated subtitles without deleting them or making another AI request.
 
-Transcripts and translations are cached locally by YouTube video ID, transcript content, language pair, and custom prompt. Reopening an already translated video loads the matching result without another AI request or token charge. Completed batches are saved during translation, so a stopped job can resume without retranslating finished batches. Use the refresh toolbar button when you intentionally want to fetch the transcript again. The cache retains the 30 most recently used videos.
+### Source and target languages
+
+- `Source language = Auto detect`: the player uses the video's original/preferred CC track and records its actual language. For a Korean CC track, Korean text is shown and Korean is passed to AI as the source language.
+- A specific `Source language`: the plugin requests that language track when available and tells AI to treat it as the source language.
+- `Learning / target language`: this is always the output language for transcript translations and never follows the Obsidian interface language.
+- No-caption Whisper transcription also detects the spoken language when Source is Auto, or receives the explicitly configured source language.
+
+Changing either language invalidates incompatible cached results. Use Refresh to intentionally fetch the video's caption track again.
+
+### Toolbar
+
+- Play / Pause: control the embedded player.
+- Camera: extract a clean source-video frame with no YouTube title, controls, progress bar, or caption overlay.
+- File text: create a Markdown transcript note containing source text, translations, and clickable timestamps.
+- Languages: manually start contextual AI translation.
+- Eye: hide or show translated subtitle rows.
+- Refresh: fetch captions again instead of using the local transcript cache.
+- Stop: cancel the active transcript translation.
+- External link: open the current time on YouTube.
+
+### Screenshots, captions, and cache
+
+Clean screenshots use `yt-dlp` and `ffmpeg`. The PNG is saved to `YouTube screenshot folder` and inserted into the most recently used note with a clickable timestamp. `YouTube screenshot display width` controls the Markdown embed width without reducing the saved PNG resolution.
+
+Caption extraction first uses YouTube's available CC track. Protected caption URLs may require [yt-dlp](https://github.com/yt-dlp/yt-dlp). If no manual or automatic CC exists, `No-caption transcription` can temporarily download and compress audio, split long videos into 25-minute chunks, and send them to Groq Whisper or OpenAI Whisper for timestamped speech-to-text. Configure the corresponding key, or choose `Disabled`. Temporary audio is deleted afterward.
+
+Transcripts and translations are cached locally by video ID, requested and detected source language, target language, transcript content, and custom prompt. An exact cache hit costs zero new AI tokens. Partial batches are saved so stopped work can resume. The cache retains the 30 most recently used videos.
 
 Some owners disable playback on other websites. The plugin cannot bypass that YouTube restriction; use the toolbar's external-link button for those videos. Captions and transcript notes may still be available.
 

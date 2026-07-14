@@ -426,6 +426,10 @@
   font-size: 13px;
 }
 
+.youtube-reader-translations-hidden .youtube-reader-translation {
+  display: none;
+}
+
 .youtube-reader-segment.is-active .youtube-reader-original {
   color: var(--text-accent);
 }

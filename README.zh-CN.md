@@ -261,9 +261,27 @@ input ↑ output ↓ (total, cached)
 
 ## YouTube 语言学习播放器（开发预览）
 
-在 Command Palette 中运行 `Open YouTube learning player`，然后粘贴 `youtube.com` 或 `youtu.be` 链接。插件会在 Obsidian 标签页中打开视频，并在旁边显示逐句字幕。自动字幕中很短、还没说完的碎片会先合并成更适合阅读的完整句子。
+![YouTube 语言学习播放器、逐句双语字幕和生成的笔记](https://raw.githubusercontent.com/skye1349/contextual-ai-reader/main/docs/images/youtube-learning-player.png)
 
-播放视频时，右侧会自动高亮当前说到的句子并滚动到对应位置。点击任意字幕或时间戳，已经打开的播放器会直接跳到那一秒，不会重新打开一个窗口。
+### 打开和浏览视频
+
+1. 在 Command Palette 中运行 `Open YouTube learning player`。
+2. 粘贴 `youtube.com` 或 `youtu.be` 链接。
+3. 视频会在独立的 Obsidian tab 中打开，tab 使用实际视频标题；不同视频不会都显示成同一个播放器名称。
+4. 右侧字幕会跟随播放、自动高亮当前句。点击任意字幕或时间戳，会让已经打开的播放器跳到对应时间。
+
+打开视频时只加载字幕，**不会自动调用 AI**。只有点击 Languages 按钮才开始翻译。每完成一个 batch，对应译文会立即出现在右侧英文/原文字幕下方，不需要等待整段视频全部完成。关闭这个视频 tab 或点击 Stop，会取消后续 batch，并终止当前本地 Codex/Claude 进程；已经完成的 batch 仍会保存在缓存中。
+
+点击 Eye 按钮可以随时隐藏或恢复译文。隐藏只影响显示，不会删除译文、停止缓存，也不会产生新的 token 消耗。
+
+### 源语言和学习语言
+
+- `Source language = Auto detect`：打开视频时按视频原始/首选 CC 字幕轨识别语言。比如播放器 CC 是 Korean，右侧就读取韩文字幕，并明确把 Korean 作为 AI 翻译源语言。
+- `Source language` 选择具体语言：插件优先请求该语言的 CC，并明确告诉 AI 按该语言理解原文。
+- `Learning / target language`：始终是 AI 译文和解释使用的目标语言，不跟随 Obsidian 界面语言改变。
+- 视频没有 CC、需要 Whisper 时：Auto 会让 Whisper 检测口语；选择具体 Source language 时则把该语言传给 Whisper。
+
+缓存同时记录“设置里请求的源语言”和“字幕实际语言”。旧缓存或语言设置不匹配时不会继续错误复用。修改 Source/Target 后可点 Refresh 主动重新抓取字幕。
 
 播放器工具栏包含：
 
@@ -271,15 +289,18 @@ input ↑ output ↓ (total, cached)
 - Camera：通过 `yt-dlp` 和 `ffmpeg` 直接提取当前时间点的原始视频帧，不包含 YouTube 标题、播放按钮、进度条或字幕覆盖层；然后保存到 `YouTube screenshot folder`，并把图片和可点击时间戳插入最近使用的 Markdown 笔记。
 - File text：把当前字幕、翻译和时间戳生成到 `YouTube transcript folder`。
 - Languages：使用当前 AI 后端按连续字幕上下文批量翻译。
+- Eye：隐藏或显示已经翻译好的字幕，不重新调用 AI。
 - Stop：真正停止正在运行的 AI 字幕翻译，并终止本地 Codex/Claude CLI 进程。
 - External link：在 YouTube 网站打开当前视频和时间位置。
 - Refresh：主动重新获取字幕；正常再次打开同一个视频时不需要刷新。
 
-字幕提取会先尝试不依赖额外程序的方式。由于 YouTube 越来越多字幕地址带有动态签名，一些视频需要安装 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 才能稳定读取。干净截图和无字幕转录还需要安装 [ffmpeg](https://ffmpeg.org/)。安装后可让两个 command 设置保持为空自动检测，也可以填写完整路径。
+### 截图、字幕提取和本地缓存
+
+字幕提取会优先读取 YouTube 提供的 CC。由于越来越多字幕地址带有动态签名，一些视频需要安装 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 才能稳定读取。干净截图和无字幕转录还需要安装 [ffmpeg](https://ffmpeg.org/)。安装后可让两个 command 设置保持为空自动检测，也可以填写完整路径。
 
 如果视频既没有人工 CC，也没有 YouTube 自动字幕，可在 `No-caption transcription` 中选择 Groq Whisper 或 OpenAI Whisper。插件会临时下载并压缩音频，调用带时间戳的语音转文字接口，再生成可跟随播放的逐句字幕。需要在设置中填写 Groq API key，或者使用已有的 OpenAI API key；不希望上传音频时请选择 `Disabled`。临时音频会在转录结束后删除。
 
-字幕和译文会以 YouTube video ID、字幕内容、源语言、目标语言和自定义提示词为键保存在插件本地缓存中。以后再次打开并翻译同一个视频时，精确命中缓存就不会再次调用 AI，token 消耗为 0。翻译过程中每完成一批也会立即保存，因此中途停止后可从已完成处继续。缓存保留最近使用的 30 个视频；只有主动点击 Refresh、字幕内容改变或修改语言/提示词时，才可能产生新的请求。
+字幕和译文会以 YouTube video ID、请求/识别到的源语言、目标语言、字幕内容和自定义提示词为键保存在插件本地缓存中。以后再次打开并翻译同一个视频时，精确命中缓存就不会再次调用 AI，token 消耗为 0。翻译过程中每完成一批也会立即保存，因此中途停止后可从已完成处继续。缓存保留最近使用的 30 个视频；只有主动点击 Refresh、字幕内容改变或修改语言/提示词时，才可能产生新的请求。
 
 `YouTube screenshot display width` 控制截图插入笔记后的显示宽度，范围为 100–2000 px；原始 PNG 分辨率不会因此降低。
 

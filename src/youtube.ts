@@ -21,12 +21,12 @@ export interface YouTubeSegment {
 
 export interface YouTubeVideoData {
   segments: YouTubeSegment[];
+  sourceLanguage?: string;
   title: string;
   videoId: string;
 }
 
 export interface YouTubeViewHost {
-  autoTranslate: () => boolean;
   captureVideoFrame: (view: YouTubeLearningView) => Promise<void>;
   createTranscriptNote: (data: YouTubeVideoData) => Promise<void>;
   fetchTranscriptFallback: (videoId: string, preferredLanguage: string) => Promise<YouTubeVideoData>;
@@ -36,7 +36,7 @@ export interface YouTubeViewHost {
   stopTranslation: () => void;
   translateSegments: (
     data: YouTubeVideoData,
-    onProgress: (completed: number, total: number) => void
+    onProgress: (completed: number, total: number, translations: readonly string[]) => void
   ) => Promise<string[]>;
 }
 
@@ -48,11 +48,19 @@ interface CaptionTrack {
   vssId?: string;
 }
 
+interface AudioTrack {
+  audioTrackId?: string;
+}
+
+interface CaptionTrackList {
+  audioTracks?: AudioTrack[];
+  captionTracks?: CaptionTrack[];
+  defaultAudioTrackIndex?: number;
+}
+
 interface PlayerResponse {
   captions?: {
-    playerCaptionsTracklistRenderer?: {
-      captionTracks?: CaptionTrack[];
-    };
+    playerCaptionsTracklistRenderer?: CaptionTrackList;
   };
   videoDetails?: {
     title?: string;
@@ -133,6 +141,7 @@ export class YouTubeLearningView extends ItemView {
   private transcriptEl?: HTMLElement;
   private translationRunning = false;
   private translationSerial = 0;
+  private translationsVisible = true;
   private videoId = "";
 
   constructor(leaf: WorkspaceLeaf, private readonly host: YouTubeViewHost) {
@@ -160,6 +169,11 @@ export class YouTubeLearningView extends ItemView {
 
   async onClose() {
     this.containerEl.win.removeEventListener("message", this.handlePlayerMessage);
+    if (this.translationRunning) {
+      this.translationSerial++;
+      this.translationRunning = false;
+      this.host.stopTranslation();
+    }
   }
 
   getVideoBounds(): DOMRect | null {
@@ -196,11 +210,9 @@ export class YouTubeLearningView extends ItemView {
         const cached = await this.host.getCachedVideo(videoId);
         if (cached && this.videoId === videoId) {
           this.data = cached;
+          this.refreshTabTitle();
           this.renderPlayer(cached);
           this.setStatus(`${cached.segments.length} subtitle sentences loaded from local cache.`);
-          if (this.host.autoTranslate() && cached.segments.some((segment) => !segment.translation)) {
-            void this.translateTranscript();
-          }
           return;
         }
       }
@@ -209,24 +221,22 @@ export class YouTubeLearningView extends ItemView {
       if (this.videoId !== videoId) return;
       await this.host.saveVideo(data);
       this.data = data;
+      this.refreshTabTitle();
       this.renderPlayer(data);
-      if (this.host.autoTranslate() && data.segments.length > 0) {
-        void this.translateTranscript();
-      }
     } catch (directError) {
       try {
         const data = await this.host.fetchTranscriptFallback(videoId, this.host.sourceLanguage());
         if (this.videoId !== videoId) return;
         await this.host.saveVideo(data);
         this.data = data;
+        this.refreshTabTitle();
         this.renderPlayer(data);
         this.setStatus(`${data.segments.length} subtitle sentences loaded through yt-dlp fallback.`);
-        if (this.host.autoTranslate() && data.segments.length > 0) {
-          void this.translateTranscript();
-        }
       } catch (fallbackError) {
         if (this.videoId !== videoId) return;
-        this.renderPlayer({ title: `YouTube ${videoId}`, videoId, segments: [] });
+        this.data = { title: `YouTube ${videoId}`, videoId, segments: [] };
+        this.refreshTabTitle();
+        this.renderPlayer(this.data);
         this.setStatus(
           `Subtitles unavailable: ${getErrorMessage(directError)} Fallback: ${getErrorMessage(fallbackError)}`,
           true
@@ -273,6 +283,12 @@ export class YouTubeLearningView extends ItemView {
     this.addToolbarButton(toolbar, "languages", "Translate transcript with AI", () => {
       void this.translateTranscript();
     });
+    const visibilityButton = this.addToolbarButton(
+      toolbar,
+      this.translationsVisible ? "eye-off" : "eye",
+      this.translationsVisible ? "Hide translated subtitles" : "Show translated subtitles",
+      () => this.toggleTranslations(visibilityButton)
+    );
     this.addToolbarButton(toolbar, "refresh-cw", "Refresh subtitles and cached transcript", () => {
       void this.loadVideo(this.videoId, this.currentTime, true);
     });
@@ -317,13 +333,29 @@ export class YouTubeLearningView extends ItemView {
     this.renderTranscript();
   }
 
-  private addToolbarButton(parent: HTMLElement, icon: string, label: string, onClick: () => void) {
+  private addToolbarButton(parent: HTMLElement, icon: string, label: string, onClick: () => void): HTMLButtonElement {
     const button = parent.createEl("button", {
-      attr: { "aria-label": label },
+      attr: { "aria-label": label, title: label },
       cls: "clickable-icon youtube-reader-tool"
     });
     setIcon(button, icon);
     button.addEventListener("click", onClick);
+    return button;
+  }
+
+  private toggleTranslations(button: HTMLButtonElement) {
+    this.translationsVisible = !this.translationsVisible;
+    this.containerEl.toggleClass("youtube-reader-translations-hidden", !this.translationsVisible);
+    const label = this.translationsVisible ? "Hide translated subtitles" : "Show translated subtitles";
+    button.setAttribute("aria-label", label);
+    button.setAttribute("title", label);
+    button.setAttribute("aria-pressed", String(!this.translationsVisible));
+    setIcon(button, this.translationsVisible ? "eye-off" : "eye");
+  }
+
+  private refreshTabTitle() {
+    const leaf = this.leaf as WorkspaceLeaf & { updateHeader?: () => void };
+    leaf.updateHeader?.();
   }
 
   private renderTranscript() {
@@ -374,16 +406,14 @@ export class YouTubeLearningView extends ItemView {
     this.setStatus(`AI translating 0/${data.segments.length} subtitle sentences…`);
 
     try {
-      const translations = await this.host.translateSegments(data, (completed, total) => {
+      const translations = await this.host.translateSegments(data, (completed, total, completedTranslations) => {
         if (this.data === data && requestId === this.translationSerial) {
+          this.applyTranslations(completedTranslations);
           this.setStatus(`AI translating ${completed}/${total} subtitle sentences…`);
         }
       });
       if (this.data !== data || requestId !== this.translationSerial) return;
-      data.segments.forEach((segment, index) => {
-        segment.translation = translations[index]?.trim() || segment.translation;
-      });
-      this.renderTranscript();
+      this.applyTranslations(translations);
       this.setStatus(`Translation complete: ${translations.length} subtitle sentences.`);
     } catch (error) {
       if (this.data !== data || requestId !== this.translationSerial) return;
@@ -391,6 +421,25 @@ export class YouTubeLearningView extends ItemView {
     } finally {
       if (requestId === this.translationSerial) this.translationRunning = false;
     }
+  }
+
+  private applyTranslations(translations: readonly string[]) {
+    if (!this.data) return;
+    translations.forEach((value, index) => {
+      const translation = value?.trim();
+      const segment = this.data?.segments[index];
+      const row = this.segmentEls[index];
+      if (!translation || !segment || !row) return;
+      segment.translation = translation;
+      const content = row.querySelector<HTMLElement>(".youtube-reader-segment-content");
+      if (!content) return;
+      let element = content.querySelector<HTMLElement>(".youtube-reader-translation");
+      if (!element) {
+        element = content.createDiv({ cls: "youtube-reader-translation" });
+        element.addEventListener("click", () => this.seekTo(segment.start));
+      }
+      element.setText(translation);
+    });
   }
 
   private setStatus(text: string, error = false) {
@@ -509,8 +558,9 @@ async function fetchYouTubeVideoData(videoId: string, preferredLanguage: string)
   if (!player) throw new Error("YouTube did not provide playable metadata.");
 
   const title = player.videoDetails?.title?.trim() || `YouTube ${videoId}`;
-  const tracks = player.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
-  const track = chooseCaptionTrack(tracks, preferredLanguage);
+  const trackList = player.captions?.playerCaptionsTracklistRenderer;
+  const tracks = trackList?.captionTracks ?? [];
+  const track = chooseCaptionTrack(tracks, preferredLanguage, getDefaultAudioLanguage(trackList));
   if (!track?.baseUrl) throw new Error("YouTube did not provide an accessible caption track.");
 
   const captionUrl = `${track.baseUrl.replace(/([?&])fmt=[^&]*/g, "$1")}\u0026fmt=json3`;
@@ -520,6 +570,7 @@ async function fetchYouTubeVideoData(videoId: string, preferredLanguage: string)
   }
 
   return {
+    sourceLanguage: track.languageCode,
     title,
     videoId,
     segments: parseYouTubeJson3(captionResponse.text)
@@ -567,8 +618,25 @@ function readBalancedJsonObject(input: string, start: number): string | null {
   return null;
 }
 
-function chooseCaptionTrack(tracks: CaptionTrack[], preferredLanguage: string): CaptionTrack | undefined {
-  const preferred = preferredLanguage === "auto" ? "en" : preferredLanguage.toLowerCase();
+function chooseCaptionTrack(
+  tracks: CaptionTrack[],
+  preferredLanguage: string,
+  defaultAudioLanguage?: string
+): CaptionTrack | undefined {
+  if (preferredLanguage === "auto") {
+    if (defaultAudioLanguage) {
+      const preferred = defaultAudioLanguage.toLowerCase();
+      const base = preferred.split("-")[0];
+      return tracks.find((track) => track.languageCode?.toLowerCase() === preferred && track.kind !== "asr")
+        ?? tracks.find((track) => track.languageCode?.toLowerCase() === base && track.kind !== "asr")
+        ?? tracks.find((track) => track.languageCode?.toLowerCase() === preferred)
+        ?? tracks.find((track) => track.languageCode?.toLowerCase() === base)
+        ?? tracks.find((track) => track.kind !== "asr")
+        ?? tracks[0];
+    }
+    return tracks.find((track) => track.kind !== "asr") ?? tracks[0];
+  }
+  const preferred = preferredLanguage.toLowerCase();
   const base = preferred.split("-")[0];
   return tracks.find((track) => track.languageCode?.toLowerCase() === preferred && track.kind !== "asr")
     ?? tracks.find((track) => track.languageCode?.toLowerCase() === base && track.kind !== "asr")
@@ -577,6 +645,12 @@ function chooseCaptionTrack(tracks: CaptionTrack[], preferredLanguage: string): 
     ?? tracks.find((track) => track.languageCode?.toLowerCase() === "en" && track.kind !== "asr")
     ?? tracks.find((track) => track.languageCode?.toLowerCase() === "en")
     ?? tracks[0];
+}
+
+function getDefaultAudioLanguage(trackList?: CaptionTrackList): string | undefined {
+  const index = trackList?.defaultAudioTrackIndex ?? 0;
+  const id = trackList?.audioTracks?.[index]?.audioTrackId;
+  return id?.match(/^([A-Za-z]{2,3}(?:-[A-Za-z]{2,4})?)/)?.[1];
 }
 
 function mergeCaptionEvents(events: Json3CaptionEvent[]): YouTubeSegment[] {
