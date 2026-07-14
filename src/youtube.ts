@@ -761,7 +761,7 @@ function parseYouTubeMessage(value: unknown): YouTubeMessage | null {
       return null;
     }
   }
-  return typeof value === "object" && value !== null ? value as YouTubeMessage : null;
+  return typeof value === "object" && value !== null ? value : null;
 }
 
 function getErrorMessage(error: unknown): string {
