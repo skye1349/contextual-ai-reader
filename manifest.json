@@ -1,8 +1,8 @@
 {
   "id": "contextual-ai-reader",
   "name": "Contextual AI Reader",
-  "version": "1.0.9",
-  "minAppVersion": "1.5.0",
+  "version": "1.0.10",
+  "minAppVersion": "1.7.2",
   "description": "Multilingual AI reading companion for translation, contextual vocabulary, PDFs, and Markdown notes.",
   "author": "Taoye",
   "isDesktopOnly": true

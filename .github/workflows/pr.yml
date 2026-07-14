@@ -38,6 +38,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Run Obsidian plugin checks
+        run: npm run lint
+
       - name: Validate metadata
         shell: bash
         run: |

@@ -617,7 +617,8 @@ export default class ContextualAIReaderPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const loadedData: unknown = await this.loadData();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, isRecord(loadedData) ? loadedData : {});
     this.settings.vocabularyCache = { ...(this.settings.vocabularyCache ?? {}) };
     this.settings.youtubeCache = { ...(this.settings.youtubeCache ?? {}) };
   }
@@ -1211,7 +1212,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
       );
 
     if (existing) {
-      this.app.workspace.revealLeaf(existing.leaf);
+      await this.app.workspace.revealLeaf(existing.leaf);
       existing.seekTo(startSeconds);
       return;
     }
@@ -1232,7 +1233,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
       return;
     }
     await view.loadVideo(videoId, startSeconds);
-    this.app.workspace.revealLeaf(leaf);
+    await this.app.workspace.revealLeaf(leaf);
   }
 
   private async translateYouTubeSegments(
@@ -1664,7 +1665,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
     const cursor = view.editor.getCursor();
     view.editor.replaceRange(markdown, cursor);
-    await view.requestSave();
+    view.requestSave();
   }
 
   private async runAITranslation(sourceText: string, onChunk?: (text: string) => void): Promise<string> {
@@ -2239,7 +2240,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
     this.translationCache.set(cacheKey, translation);
 
     if (this.translationCache.size > 30) {
-      const oldestKey = this.translationCache.keys().next().value as string | undefined;
+      const oldestKey = this.translationCache.keys().next().value;
       if (oldestKey) {
         this.translationCache.delete(oldestKey);
       }
@@ -2824,7 +2825,9 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
       .setName("Source language")
       .setDesc("Language of the text you are reading. Auto detect works well for mixed notes.")
       .addDropdown((dropdown) => {
-        LANGUAGE_OPTIONS.forEach((option) => dropdown.addOption(option.code, option.label));
+        LANGUAGE_OPTIONS.forEach((option) => {
+          dropdown.addOption(option.code, option.label);
+        });
         dropdown
           .setValue(this.plugin.settings.sourceLanguage)
           .onChange(async (value) => {
@@ -2839,7 +2842,9 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
       .addDropdown((dropdown) => {
         LANGUAGE_OPTIONS
           .filter((option) => option.code !== "auto")
-          .forEach((option) => dropdown.addOption(option.code, option.label));
+          .forEach((option) => {
+            dropdown.addOption(option.code, option.label);
+          });
         dropdown
           .setValue(this.plugin.settings.targetLanguage === "auto" ? DEFAULT_SETTINGS.targetLanguage : this.plugin.settings.targetLanguage)
           .onChange(async (value) => {
@@ -4001,13 +4006,13 @@ function hasClaudeCommand(configuredCommand: string): boolean {
 
 function parseOpenAIChatCompletionResult(value: unknown): OpenAIChatCompletionResult | undefined {
   return typeof value === "object" && value !== null
-    ? value as OpenAIChatCompletionResult
+    ? value
     : undefined;
 }
 
 function parseAnthropicMessageResult(value: unknown): AnthropicMessageResult | undefined {
   return typeof value === "object" && value !== null
-    ? value as AnthropicMessageResult
+    ? value
     : undefined;
 }
 
@@ -4370,7 +4375,16 @@ function formatDateOnly(date: Date): string {
 }
 
 function escapeInlineFieldValue(value: string): string {
-  return value.replace(/\s+/g, " ").replace(/[|\[\]]/g, "").trim();
+  return value
+    .replace(/\s+/g, " ")
+    .replaceAll("|", "")
+    .replaceAll("[", "")
+    .replaceAll("]", "")
+    .trim();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function sanitizeTagSegment(value: string): string {
