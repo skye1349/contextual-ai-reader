@@ -1,6 +1,6 @@
 import { spawn } from "child_process";
 import { existsSync, readdirSync } from "fs";
-import { mkdtemp, readFile, rm } from "fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "fs/promises";
 import { homedir, tmpdir } from "os";
 import { delimiter, join } from "path";
 import {
@@ -37,6 +37,7 @@ type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
 type InsertMode = "replace" | "append";
 type FullDocumentInsertMode = "append" | "interleave";
 type AIBackend = "auto" | "codex" | "claude" | "openai" | "anthropic";
+type YouTubeTranscriptionBackend = "auto" | "groq" | "openai" | "off";
 
 interface ContextualAIReaderSettings {
   aiBackend: AIBackend;
@@ -67,8 +68,13 @@ interface ContextualAIReaderSettings {
   targetLanguage: string;
   timeoutSeconds: number;
   vocabularyCache: Record<string, VocabularyCacheEntry>;
+  youtubeCache: Record<string, YouTubeCacheEntry>;
   youtubeAutoTranslate: boolean;
+  youtubeFfmpegCommand: string;
+  youtubeGroqApiKey: string;
   youtubeScreenshotFolder: string;
+  youtubeScreenshotWidth: number;
+  youtubeTranscriptionBackend: YouTubeTranscriptionBackend;
   youtubeTranscriptFolder: string;
   youtubeYtDlpCommand: string;
 }
@@ -102,8 +108,13 @@ const DEFAULT_SETTINGS: ContextualAIReaderSettings = {
   targetLanguage: "zh-CN",
   timeoutSeconds: 90,
   vocabularyCache: {},
+  youtubeCache: {},
   youtubeAutoTranslate: true,
+  youtubeFfmpegCommand: "",
+  youtubeGroqApiKey: "",
   youtubeScreenshotFolder: "Contextual AI Reader/YouTube Screenshots",
+  youtubeScreenshotWidth: 720,
+  youtubeTranscriptionBackend: "auto",
   youtubeTranscriptFolder: "Contextual AI Reader/YouTube Transcripts",
   youtubeYtDlpCommand: ""
 };
@@ -228,6 +239,19 @@ function buildYtDlpCandidates(): string[] {
 }
 
 const YT_DLP_CANDIDATES = buildYtDlpCandidates();
+
+function buildFfmpegCandidates(): string[] {
+  const home = getHomeDir();
+  return process.platform === "win32"
+    ? [
+      join(home, "scoop", "shims", "ffmpeg.exe"),
+      "ffmpeg.exe",
+      "ffmpeg"
+    ]
+    : ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg", "ffmpeg"];
+}
+
+const FFMPEG_CANDIDATES = buildFfmpegCandidates();
 
 interface SourceReference {
   endLine?: number;
@@ -365,6 +389,20 @@ interface YtDlpMetadata {
   title?: string;
 }
 
+interface YouTubeCacheEntry {
+  segments: Array<{ duration: number; start: number; text: string }>;
+  title: string;
+  translations: Record<string, string[]>;
+  updatedAt: number;
+  videoId: string;
+}
+
+interface TranscriptionResult {
+  duration?: number;
+  segments?: Array<{ end?: number; start?: number; text?: string }>;
+  text?: string;
+}
+
 export default class ContextualAIReaderPlugin extends Plugin {
   settings: ContextualAIReaderSettings = DEFAULT_SETTINGS;
   private autoTimer?: number;
@@ -390,9 +428,11 @@ export default class ContextualAIReaderPlugin extends Plugin {
       captureVideoFrame: (view) => this.captureYouTubeFrame(view),
       createTranscriptNote: (data) => this.createYouTubeTranscriptNote(data),
       fetchTranscriptFallback: (videoId, language) => this.fetchYouTubeWithYtDlp(videoId, language),
+      getCachedVideo: (videoId) => this.getCachedYouTubeVideo(videoId),
+      saveVideo: (data) => this.cacheYouTubeTranscript(data),
       sourceLanguage: () => this.settings.sourceLanguage,
       stopTranslation: () => this.stopCurrentTranslation(),
-      translateSegments: (segments, onProgress) => this.translateYouTubeSegments(segments, onProgress)
+      translateSegments: (data, onProgress) => this.translateYouTubeSegments(data, onProgress)
     }));
 
     this.statusBarEl = this.addStatusBarItem();
@@ -573,6 +613,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     this.settings.vocabularyCache = { ...(this.settings.vocabularyCache ?? {}) };
+    this.settings.youtubeCache = { ...(this.settings.youtubeCache ?? {}) };
   }
 
   async saveSettings() {
@@ -1189,22 +1230,33 @@ export default class ContextualAIReaderPlugin extends Plugin {
   }
 
   private async translateYouTubeSegments(
-    segments: YouTubeSegment[],
+    data: YouTubeVideoData,
     onProgress: (completed: number, total: number) => void
   ): Promise<string[]> {
+    const segments = data.segments;
+    const cacheKey = this.getYouTubeTranslationCacheKey(data);
+    const cached = this.settings.youtubeCache[data.videoId]?.translations[cacheKey] ?? [];
+    const translations = cached.slice(0, segments.length);
+    if (translations.length === segments.length) {
+      onProgress(segments.length, segments.length);
+      new Notice("Loaded the YouTube translation from local cache. Token usage: 0.");
+      return translations;
+    }
+
     if (!this.beginOverlayOperation()) {
       throw new Error("Another full-document or transcript translation is already running.");
     }
     this.startOperation();
     const batchSize = 24;
-    const translations: string[] = [];
+    onProgress(translations.length, segments.length);
 
     try {
-      for (let start = 0; start < segments.length; start += batchSize) {
+      for (let start = translations.length; start < segments.length; start += batchSize) {
         if (this.isCancelled) throw new Error("Translation stopped.");
         const batch = segments.slice(start, start + batchSize);
         const translated = await this.translateYouTubeBatch(batch);
         translations.push(...translated);
+        await this.cacheYouTubeTranslation(data, cacheKey, translations);
         onProgress(Math.min(start + batch.length, segments.length), segments.length);
       }
 
@@ -1230,11 +1282,14 @@ export default class ContextualAIReaderPlugin extends Plugin {
       this.settings.timeoutSeconds * 1000
     );
 
+    this.currentKills.add(handle.kill);
     let result: ProcessResult;
     try {
       result = await handle.promise;
     } catch (error) {
       throw new Error(`yt-dlp is required for this video's protected subtitle URLs. Configure it in plugin settings. ${getErrorMessage(error)}`);
+    } finally {
+      this.currentKills.delete(handle.kill);
     }
     if (result.code !== 0) throw new Error(compactProcessError(result.stderr || result.stdout));
 
@@ -1245,10 +1300,11 @@ export default class ContextualAIReaderPlugin extends Plugin {
       throw new Error("yt-dlp returned invalid video metadata.");
     }
 
+    const title = metadata.title?.trim() || `YouTube ${videoId}`;
     const track = chooseYtDlpCaption(metadata, preferredLanguage);
     const format = track?.formats.find((candidate) => candidate.ext === "json3" && candidate.url)
       ?? track?.formats.find((candidate) => candidate.url);
-    if (!format?.url) throw new Error("No accessible subtitle track was found by yt-dlp.");
+    if (!format?.url) return await this.transcribeYouTubeAudio(videoId, title);
 
     const response = await requestUrl({ url: format.url, throw: false });
     if (response.status < 200 || response.status >= 300 || !response.text.trim()) {
@@ -1258,11 +1314,194 @@ export default class ContextualAIReaderPlugin extends Plugin {
       throw new Error(`yt-dlp did not provide JSON3 captions (received ${format.ext}).`);
     }
 
+    const segments = parseYouTubeJson3(response.text);
+    if (segments.length === 0) return await this.transcribeYouTubeAudio(videoId, title);
     return {
-      title: metadata.title?.trim() || `YouTube ${videoId}`,
+      title,
       videoId,
-      segments: parseYouTubeJson3(response.text)
+      segments
     };
+  }
+
+  private async getCachedYouTubeVideo(videoId: string): Promise<YouTubeVideoData | undefined> {
+    const entry = this.settings.youtubeCache[videoId];
+    if (!entry?.segments.length) return undefined;
+    const data: YouTubeVideoData = {
+      title: entry.title,
+      videoId,
+      segments: entry.segments.map((segment) => ({ ...segment }))
+    };
+    const translations = entry.translations[this.getYouTubeTranslationCacheKey(data)];
+    if (translations?.length === data.segments.length) {
+      data.segments.forEach((segment, index) => { segment.translation = translations[index]; });
+    }
+    entry.updatedAt = Date.now();
+    return data;
+  }
+
+  private async cacheYouTubeTranscript(data: YouTubeVideoData): Promise<void> {
+    if (data.segments.length === 0) return;
+    const old = this.settings.youtubeCache[data.videoId];
+    const segments = data.segments.map(({ duration, start, text }) => ({ duration, start, text }));
+    const sameTranscript = old && hashString(JSON.stringify(old.segments)) === hashString(JSON.stringify(segments));
+    this.settings.youtubeCache[data.videoId] = {
+      segments,
+      title: data.title,
+      translations: sameTranscript ? old.translations : {},
+      updatedAt: Date.now(),
+      videoId: data.videoId
+    };
+    this.trimYouTubeCache();
+    await this.saveSettings();
+  }
+
+  private async cacheYouTubeTranslation(
+    data: YouTubeVideoData,
+    cacheKey: string,
+    translations: string[]
+  ): Promise<void> {
+    if (!this.settings.youtubeCache[data.videoId]) await this.cacheYouTubeTranscript(data);
+    const entry = this.settings.youtubeCache[data.videoId];
+    if (!entry) return;
+    entry.translations[cacheKey] = [...translations];
+    entry.updatedAt = Date.now();
+    await this.saveSettings();
+  }
+
+  private getYouTubeTranslationCacheKey(data: YouTubeVideoData): string {
+    return hashString(JSON.stringify({
+      customPrompt: this.settings.customPrompt.trim(),
+      sourceLanguage: this.settings.sourceLanguage,
+      targetLanguage: this.settings.targetLanguage,
+      transcript: data.segments.map(({ duration, start, text }) => [duration, start, text])
+    }));
+  }
+
+  private trimYouTubeCache() {
+    const entries = Object.values(this.settings.youtubeCache)
+      .sort((left, right) => right.updatedAt - left.updatedAt);
+    for (const entry of entries.slice(30)) delete this.settings.youtubeCache[entry.videoId];
+  }
+
+  private async transcribeYouTubeAudio(videoId: string, title: string): Promise<YouTubeVideoData> {
+    const backend = this.getYouTubeTranscriptionBackend();
+    if (backend === "off") {
+      throw new Error("This video has no captions and automatic transcription is disabled in plugin settings.");
+    }
+
+    const tempDir = await mkdtemp(join(tmpdir(), "contextual-ai-reader-youtube-"));
+    const sourceTemplate = join(tempDir, "source.%(ext)s");
+    const audioPattern = join(tempDir, "audio-%03d.mp3");
+    try {
+      new Notice("No captions found. Downloading audio for speech-to-text…", 6000);
+      await this.runTrackedProcess(
+        resolveYtDlpCommand(this.settings.youtubeYtDlpCommand),
+        ["--no-update", "--no-playlist", "-f", "bestaudio/best", "-o", sourceTemplate, `https://www.youtube.com/watch?v=${videoId}`],
+        Math.max(this.settings.timeoutSeconds, 600) * 1000
+      );
+      const sourceName = (await readdir(tempDir)).find((name) => name.startsWith("source.") && !name.endsWith(".part"));
+      if (!sourceName) throw new Error("yt-dlp downloaded no usable audio file.");
+
+      new Notice("Preparing audio for accurate timestamped transcription…", 5000);
+      await this.runTrackedProcess(
+        resolveFfmpegCommand(this.settings.youtubeFfmpegCommand),
+        [
+          "-hide_banner", "-loglevel", "error", "-i", join(tempDir, sourceName),
+          "-vn", "-ac", "1", "-ar", "16000", "-b:a", "24k",
+          "-f", "segment", "-segment_time", "1500", "-reset_timestamps", "1", "-y", audioPattern
+        ],
+        Math.max(this.settings.timeoutSeconds, 600) * 1000
+      );
+
+      const audioFiles = (await readdir(tempDir)).filter((name) => /^audio-\d+\.mp3$/.test(name)).sort();
+      if (audioFiles.length === 0) throw new Error("ffmpeg produced no transcription audio chunks.");
+      const segments: YouTubeSegment[] = [];
+      for (let index = 0; index < audioFiles.length; index++) {
+        new Notice(
+          `Transcribing audio ${index + 1}/${audioFiles.length} with ${backend === "groq" ? "Groq Whisper" : "OpenAI Whisper"}…`,
+          8000
+        );
+        const result = await this.requestYouTubeTranscription(await readFile(join(tempDir, audioFiles[index])), backend);
+        const offset = index * 1500;
+        for (const segment of result.segments ?? []) {
+          const text = segment.text?.trim();
+          const start = segment.start;
+          const end = segment.end;
+          if (text && typeof start === "number") {
+            segments.push({
+              start: offset + start,
+              duration: Math.max(0.5, (typeof end === "number" ? end : start + 3) - start),
+              text
+            });
+          }
+        }
+      }
+      if (segments.length === 0) throw new Error("Speech-to-text returned no timestamped segments.");
+      return { title, videoId, segments };
+    } finally {
+      await rm(tempDir, { force: true, recursive: true });
+    }
+  }
+
+  private getYouTubeTranscriptionBackend(): "groq" | "openai" | "off" {
+    const configured = this.settings.youtubeTranscriptionBackend;
+    if (configured === "off") return "off";
+    if (configured === "groq" || (configured === "auto" && this.settings.youtubeGroqApiKey.trim())) {
+      if (!this.settings.youtubeGroqApiKey.trim()) throw new Error("Add a Groq API key for no-caption transcription.");
+      return "groq";
+    }
+    if (configured === "openai" || configured === "auto") {
+      if (!this.settings.openaiApiKey.trim()) {
+        throw new Error("This video has no captions. Add a Groq or OpenAI API key for Whisper transcription, or disable this fallback.");
+      }
+      return "openai";
+    }
+    return "off";
+  }
+
+  private async requestYouTubeTranscription(
+    audio: Buffer,
+    backend: "groq" | "openai"
+  ): Promise<TranscriptionResult> {
+    const model = backend === "groq" ? "whisper-large-v3-turbo" : "whisper-1";
+    const fields: Array<[string, string]> = [
+      ["model", model],
+      ["response_format", "verbose_json"],
+      ["timestamp_granularities[]", "segment"]
+    ];
+    if (this.settings.sourceLanguage !== "auto") {
+      fields.push(["language", this.settings.sourceLanguage.split("-")[0]]);
+    }
+    const multipart = buildMultipartFormData(fields, "file", "audio.mp3", "audio/mpeg", audio);
+    const baseUrl = normalizeApiBaseUrl(this.settings.openaiBaseUrl, DEFAULT_SETTINGS.openaiBaseUrl);
+    const response = await requestUrl({
+      url: backend === "groq"
+        ? "https://api.groq.com/openai/v1/audio/transcriptions"
+        : `${baseUrl}/audio/transcriptions`,
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${backend === "groq" ? this.settings.youtubeGroqApiKey.trim() : this.settings.openaiApiKey.trim()}`,
+        "Content-Type": `multipart/form-data; boundary=${multipart.boundary}`
+      },
+      body: toArrayBuffer(multipart.body),
+      throw: false
+    });
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`Speech-to-text returned HTTP ${response.status}: ${response.text.slice(0, 300)}`);
+    }
+    return response.json as TranscriptionResult;
+  }
+
+  private async runTrackedProcess(command: string, args: string[], timeoutMs: number): Promise<ProcessResult> {
+    const handle = spawnProcess(command, args, "", timeoutMs);
+    this.currentKills.add(handle.kill);
+    try {
+      const result = await handle.promise;
+      if (result.code !== 0) throw new Error(compactProcessError(result.stderr || result.stdout));
+      return result;
+    } finally {
+      this.currentKills.delete(handle.kill);
+    }
   }
 
   private async translateYouTubeBatch(segments: YouTubeSegment[]): Promise<string[]> {
@@ -1298,27 +1537,38 @@ export default class ContextualAIReaderPlugin extends Plugin {
   }
 
   private async captureYouTubeFrame(view: YouTubeLearningView) {
-    const bounds = view.getVideoBounds();
     const data = view.getVideoData();
-    if (!bounds || !data) {
+    if (!data) {
       new Notice("The YouTube player is not ready yet.");
       return;
     }
-
-    const electronWindow = getElectronWindow();
-    if (!electronWindow) {
-      new Notice("Video frame capture is available in the Obsidian desktop app only.");
-      return;
-    }
-
+    const tempDir = await mkdtemp(join(tmpdir(), "contextual-ai-reader-frame-"));
     try {
-      const image = await electronWindow.webContents.capturePage({
-        x: Math.max(0, Math.round(bounds.left)),
-        y: Math.max(0, Math.round(bounds.top)),
-        width: Math.max(1, Math.round(bounds.width)),
-        height: Math.max(1, Math.round(bounds.height))
-      });
-      const png = image.toPNG();
+      new Notice("Extracting the clean video frame…", 4000);
+      const outputPath = join(tempDir, "frame.png");
+      let png: Buffer | undefined;
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 2 && !png; attempt++) {
+        try {
+          const stream = await this.runTrackedProcess(
+            resolveYtDlpCommand(this.settings.youtubeYtDlpCommand),
+            ["--no-update", "--no-playlist", "-f", "bestvideo[height<=1080]/best[height<=1080]/bestvideo/best", "-g", `https://www.youtube.com/watch?v=${data.videoId}`],
+            Math.max(this.settings.timeoutSeconds, 180) * 1000
+          );
+          const streamUrl = stream.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+          if (!streamUrl) throw new Error("yt-dlp did not return a playable video stream.");
+          await this.runTrackedProcess(
+            resolveFfmpegCommand(this.settings.youtubeFfmpegCommand),
+            ["-hide_banner", "-loglevel", "error", "-ss", String(Math.max(0, view.getCurrentTime())), "-i", streamUrl, "-frames:v", "1", "-vf", "scale='min(1920,iw)':-2", "-y", outputPath],
+            Math.max(this.settings.timeoutSeconds, 180) * 1000
+          );
+          png = await readFile(outputPath);
+        } catch (error) {
+          lastError = error;
+          if (attempt === 0) await sleep(800);
+        }
+      }
+      if (!png) throw lastError instanceof Error ? lastError : new Error("Could not extract a clean video frame.");
       const folder = normalizeYouTubeFolder(
         this.settings.youtubeScreenshotFolder,
         DEFAULT_SETTINGS.youtubeScreenshotFolder
@@ -1327,16 +1577,18 @@ export default class ContextualAIReaderPlugin extends Plugin {
       const stamp = formatFileTimestamp(new Date());
       const fileName = `${sanitizeFileName(data.title)} ${formatTimestamp(view.getCurrentTime()).replace(/:/g, "-")} ${stamp}.png`;
       const path = await this.getAvailableVaultPath(`${folder}/${fileName}`);
-      const buffer = png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength) as ArrayBuffer;
-      await this.app.vault.createBinary(path, buffer);
+      await this.app.vault.createBinary(path, toArrayBuffer(png));
 
       const timestamp = formatTimestamp(view.getCurrentTime());
       const uri = buildYouTubeTimestampUri(data.videoId, view.getCurrentTime());
-      await this.insertIntoLastMarkdown(`\n\n[${timestamp}](${uri})\n\n![[${path}]]\n`);
+      const width = clamp(this.settings.youtubeScreenshotWidth, 100, 2000);
+      await this.insertIntoLastMarkdown(`\n\n[${timestamp}](${uri})\n\n![[${path}|${width}]]\n`);
       new Notice(`Captured the video frame to ${path}.`);
     } catch (error) {
       new Notice(`Could not capture the video frame: ${getErrorMessage(error)}`);
       console.error("Could not capture YouTube frame", error);
+    } finally {
+      await rm(tempDir, { force: true, recursive: true });
     }
   }
 
@@ -2712,6 +2964,22 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("YouTube screenshot display width")
+      .setDesc("Width in pixels used when the clean video frame is embedded in a note. The saved PNG keeps its original resolution.")
+      .addText((text) =>
+        text
+          .setPlaceholder(String(DEFAULT_SETTINGS.youtubeScreenshotWidth))
+          .setValue(String(this.plugin.settings.youtubeScreenshotWidth))
+          .onChange(async (value) => {
+            const parsed = Number.parseInt(value, 10);
+            this.plugin.settings.youtubeScreenshotWidth = Number.isFinite(parsed)
+              ? clamp(parsed, 100, 2000)
+              : DEFAULT_SETTINGS.youtubeScreenshotWidth;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
       .setName("YouTube transcript folder")
       .setDesc("Vault folder for notes created from interactive transcripts.")
       .addText((text) =>
@@ -2726,7 +2994,7 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("yt-dlp command")
-      .setDesc("Optional subtitle fallback for videos whose signed caption URL is protected. Leave empty to auto-detect yt-dlp.")
+      .setDesc("Used for protected captions, clean frame capture, and no-caption audio. Leave empty to auto-detect yt-dlp.")
       .addText((text) =>
         text
           .setPlaceholder(process.platform === "win32" ? "yt-dlp.exe" : "/opt/homebrew/bin/yt-dlp")
@@ -2736,6 +3004,49 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    new Setting(containerEl)
+      .setName("ffmpeg command")
+      .setDesc("Used to extract clean video frames and prepare no-caption audio. Leave empty to auto-detect ffmpeg.")
+      .addText((text) =>
+        text
+          .setPlaceholder(process.platform === "win32" ? "ffmpeg.exe" : "/opt/homebrew/bin/ffmpeg")
+          .setValue(this.plugin.settings.youtubeFfmpegCommand)
+          .onChange(async (value) => {
+            this.plugin.settings.youtubeFfmpegCommand = value.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("No-caption transcription")
+      .setDesc("When a video has no CC track, transcribe its audio with timestamped Whisper segments. Auto prefers Groq, then OpenAI.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("auto", "Auto (Groq, then OpenAI)")
+          .addOption("groq", "Groq Whisper")
+          .addOption("openai", "OpenAI Whisper")
+          .addOption("off", "Disabled")
+          .setValue(this.plugin.settings.youtubeTranscriptionBackend)
+          .onChange(async (value) => {
+            this.plugin.settings.youtubeTranscriptionBackend = value as YouTubeTranscriptionBackend;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Groq API key for transcription")
+      .setDesc("Optional. Stored only in this plugin's local Obsidian data. Used for videos without captions.")
+      .addText((text) => {
+        text
+          .setPlaceholder("gsk_…")
+          .setValue(this.plugin.settings.youtubeGroqApiKey)
+          .onChange(async (value) => {
+            this.plugin.settings.youtubeGroqApiKey = value.trim();
+            await this.plugin.saveSettings();
+          });
+        text.inputEl.type = "password";
+      });
 
     new Setting(containerEl)
       .setName("Speech language")
@@ -3645,6 +3956,11 @@ function resolveYtDlpCommand(configuredCommand: string): string {
   return YT_DLP_CANDIDATES.find((candidate) => candidate === "yt-dlp" || existsSync(candidate)) ?? "yt-dlp";
 }
 
+function resolveFfmpegCommand(configuredCommand: string): string {
+  if (configuredCommand.trim()) return configuredCommand.trim();
+  return FFMPEG_CANDIDATES.find((candidate) => candidate === "ffmpeg" || existsSync(candidate)) ?? "ffmpeg";
+}
+
 function resolveCodexCommand(configuredCommand: string): string {
   if (configuredCommand) {
     return configuredCommand;
@@ -3710,6 +4026,33 @@ function normalizeAITextContent(
   return "";
 }
 
+function buildMultipartFormData(
+  fields: Array<[string, string]>,
+  fileField: string,
+  fileName: string,
+  contentType: string,
+  file: Buffer
+): { body: Buffer; boundary: string } {
+  const boundary = `----ContextualAIReader${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+  const chunks: Buffer[] = [];
+  for (const [name, value] of fields) {
+    chunks.push(Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`,
+      "utf8"
+    ));
+  }
+  chunks.push(Buffer.from(
+    `--${boundary}\r\nContent-Disposition: form-data; name="${fileField}"; filename="${fileName}"\r\nContent-Type: ${contentType}\r\n\r\n`,
+    "utf8"
+  ));
+  chunks.push(file, Buffer.from(`\r\n--${boundary}--\r\n`, "utf8"));
+  return { body: Buffer.concat(chunks), boundary };
+}
+
+function toArrayBuffer(value: Uint8Array): ArrayBuffer {
+  return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
+}
+
 interface ProcessResult {
   code: number | null;
   stdout: string;
@@ -3731,9 +4074,13 @@ function spawnProcess(
   let killFn: () => void = () => {};
 
   const promise = new Promise<ProcessResult>((resolve, reject) => {
+    const useShell = process.platform === "win32" && (
+      /\.(?:cmd|bat)$/i.test(command)
+      || (!/[\\/]/.test(command) && /^(?:codex|claude)$/i.test(command))
+    );
     const child = spawn(command, args, {
       env: buildCodexEnv(),
-      shell: process.platform === "win32",
+      shell: useShell,
       windowsHide: true
     });
 
@@ -3918,23 +4265,6 @@ function formatTokenCount(value: number): string {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-interface ElectronNativeImageLike {
-  toPNG: () => Uint8Array;
-}
-
-interface ElectronWindowLike {
-  webContents: {
-    capturePage: (rect: { height: number; width: number; x: number; y: number }) => Promise<ElectronNativeImageLike>;
-  };
-}
-
-function getElectronWindow(): ElectronWindowLike | null {
-  const electron = (window as Window & {
-    electron?: { remote?: { getCurrentWindow?: () => ElectronWindowLike } };
-  }).electron;
-  return electron?.remote?.getCurrentWindow?.() ?? null;
 }
 
 function parseStringArray(raw: string, expectedLength: number): string[] {
@@ -4237,6 +4567,10 @@ function getRangeRect(range: Range): DOMRect | null {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
 async function googleTranslate(text: string, targetLanguage: string, sourceLanguage: string): Promise<string> {

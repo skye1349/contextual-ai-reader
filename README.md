@@ -228,9 +228,13 @@ Run `Open YouTube learning player` from the command palette and paste a `youtube
 
 The transcript follows playback automatically. Click a sentence or its timestamp to seek the existing player to that moment. The toolbar provides play, pause, video-frame capture, transcript-note creation, contextual AI translation, stop, and open-on-YouTube controls.
 
-Screenshot capture writes only the visible player rectangle to the configured `YouTube screenshot folder`, then inserts the image and a clickable timestamp into the most recently used Markdown note. `Create note from current YouTube transcript` writes a reusable Markdown transcript to the configured `YouTube transcript folder`.
+Screenshot capture uses `yt-dlp` and `ffmpeg` to extract the original video frame at the current playback time. YouTube titles, controls, progress bars, and subtitle overlays are therefore excluded. The clean PNG is saved to `YouTube screenshot folder`, then inserted into the most recently used Markdown note with a clickable timestamp. Set `YouTube screenshot display width` to control its displayed size without reducing the saved image resolution. `Create note from current YouTube transcript` writes a reusable Markdown transcript to the configured `YouTube transcript folder`.
 
-The plugin first attempts caption extraction without an extra program. YouTube increasingly protects signed caption URLs, so some videos require [yt-dlp](https://github.com/yt-dlp/yt-dlp). Install it and leave `yt-dlp command` empty for auto-detection, or enter its full path in plugin settings. `yt-dlp` is used only to resolve metadata and subtitle URLs; this feature does not download the video.
+The plugin first attempts caption extraction without an extra program. YouTube increasingly protects signed caption URLs, so some videos require [yt-dlp](https://github.com/yt-dlp/yt-dlp). Clean screenshots and no-caption transcription also require [ffmpeg](https://ffmpeg.org/). Leave both command fields empty for auto-detection, or enter their full paths in plugin settings.
+
+If a video has no manual or automatic CC track, `No-caption transcription` can download its audio temporarily and send compressed audio to Groq Whisper or OpenAI Whisper for timestamped speech-to-text. Configure a Groq key or the existing OpenAI key; choose `Disabled` if you never want this fallback. Temporary audio is deleted after transcription.
+
+Transcripts and translations are cached locally by YouTube video ID, transcript content, language pair, and custom prompt. Reopening an already translated video loads the matching result without another AI request or token charge. Completed batches are saved during translation, so a stopped job can resume without retranslating finished batches. Use the refresh toolbar button when you intentionally want to fetch the transcript again. The cache retains the 30 most recently used videos.
 
 Some owners disable playback on other websites. The plugin cannot bypass that YouTube restriction; use the toolbar's external-link button for those videos. Captions and transcript notes may still be available.
 

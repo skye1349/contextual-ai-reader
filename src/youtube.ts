@@ -30,10 +30,12 @@ export interface YouTubeViewHost {
   captureVideoFrame: (view: YouTubeLearningView) => Promise<void>;
   createTranscriptNote: (data: YouTubeVideoData) => Promise<void>;
   fetchTranscriptFallback: (videoId: string, preferredLanguage: string) => Promise<YouTubeVideoData>;
+  getCachedVideo: (videoId: string) => Promise<YouTubeVideoData | undefined>;
+  saveVideo: (data: YouTubeVideoData) => Promise<void>;
   sourceLanguage: () => string;
   stopTranslation: () => void;
   translateSegments: (
-    segments: YouTubeSegment[],
+    data: YouTubeVideoData,
     onProgress: (completed: number, total: number) => void
   ) => Promise<string[]>;
 }
@@ -172,7 +174,7 @@ export class YouTubeLearningView extends ItemView {
     return this.currentTime;
   }
 
-  async loadVideo(urlOrId: string, startSeconds = 0) {
+  async loadVideo(urlOrId: string, startSeconds = 0, forceRefresh = false) {
     const videoId = parseYouTubeVideoId(urlOrId);
     if (!videoId) {
       new Notice("Could not read a YouTube video ID from that link.");
@@ -190,8 +192,22 @@ export class YouTubeLearningView extends ItemView {
     this.renderLoading();
 
     try {
+      if (!forceRefresh) {
+        const cached = await this.host.getCachedVideo(videoId);
+        if (cached && this.videoId === videoId) {
+          this.data = cached;
+          this.renderPlayer(cached);
+          this.setStatus(`${cached.segments.length} subtitle sentences loaded from local cache.`);
+          if (this.host.autoTranslate() && cached.segments.some((segment) => !segment.translation)) {
+            void this.translateTranscript();
+          }
+          return;
+        }
+      }
+
       const data = await fetchYouTubeVideoData(videoId, this.host.sourceLanguage());
       if (this.videoId !== videoId) return;
+      await this.host.saveVideo(data);
       this.data = data;
       this.renderPlayer(data);
       if (this.host.autoTranslate() && data.segments.length > 0) {
@@ -201,6 +217,7 @@ export class YouTubeLearningView extends ItemView {
       try {
         const data = await this.host.fetchTranscriptFallback(videoId, this.host.sourceLanguage());
         if (this.videoId !== videoId) return;
+        await this.host.saveVideo(data);
         this.data = data;
         this.renderPlayer(data);
         this.setStatus(`${data.segments.length} subtitle sentences loaded through yt-dlp fallback.`);
@@ -255,6 +272,9 @@ export class YouTubeLearningView extends ItemView {
     });
     this.addToolbarButton(toolbar, "languages", "Translate transcript with AI", () => {
       void this.translateTranscript();
+    });
+    this.addToolbarButton(toolbar, "refresh-cw", "Refresh subtitles and cached transcript", () => {
+      void this.loadVideo(this.videoId, this.currentTime, true);
     });
     this.addToolbarButton(toolbar, "square", "Stop AI transcript translation", () => {
       this.translationSerial++;
@@ -354,7 +374,7 @@ export class YouTubeLearningView extends ItemView {
     this.setStatus(`AI translating 0/${data.segments.length} subtitle sentences…`);
 
     try {
-      const translations = await this.host.translateSegments(data.segments, (completed, total) => {
+      const translations = await this.host.translateSegments(data, (completed, total) => {
         if (this.data === data && requestId === this.translationSerial) {
           this.setStatus(`AI translating ${completed}/${total} subtitle sentences…`);
         }
@@ -491,7 +511,7 @@ async function fetchYouTubeVideoData(videoId: string, preferredLanguage: string)
   const title = player.videoDetails?.title?.trim() || `YouTube ${videoId}`;
   const tracks = player.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
   const track = chooseCaptionTrack(tracks, preferredLanguage);
-  if (!track?.baseUrl) return { title, videoId, segments: [] };
+  if (!track?.baseUrl) throw new Error("YouTube did not provide an accessible caption track.");
 
   const captionUrl = `${track.baseUrl.replace(/([?&])fmt=[^&]*/g, "$1")}\u0026fmt=json3`;
   const captionResponse = await requestUrl({ url: captionUrl, throw: false });

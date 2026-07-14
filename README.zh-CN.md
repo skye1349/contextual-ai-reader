@@ -268,13 +268,20 @@ input ↑ output ↓ (total, cached)
 播放器工具栏包含：
 
 - Play / Pause：播放或暂停当前视频。
-- Camera：只截取播放器中的视频区域，保存到设置里的 `YouTube screenshot folder`，并把图片和可点击时间戳插入最近使用的 Markdown 笔记。
+- Camera：通过 `yt-dlp` 和 `ffmpeg` 直接提取当前时间点的原始视频帧，不包含 YouTube 标题、播放按钮、进度条或字幕覆盖层；然后保存到 `YouTube screenshot folder`，并把图片和可点击时间戳插入最近使用的 Markdown 笔记。
 - File text：把当前字幕、翻译和时间戳生成到 `YouTube transcript folder`。
 - Languages：使用当前 AI 后端按连续字幕上下文批量翻译。
 - Stop：真正停止正在运行的 AI 字幕翻译，并终止本地 Codex/Claude CLI 进程。
 - External link：在 YouTube 网站打开当前视频和时间位置。
+- Refresh：主动重新获取字幕；正常再次打开同一个视频时不需要刷新。
 
-字幕提取会先尝试不依赖额外程序的方式。由于 YouTube 越来越多字幕地址带有动态签名，一些视频需要安装 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 才能稳定读取。安装后可让 `yt-dlp command` 保持为空自动检测，也可以在设置中填写完整路径。插件只使用它解析视频元数据和字幕 URL，不会下载整段视频。
+字幕提取会先尝试不依赖额外程序的方式。由于 YouTube 越来越多字幕地址带有动态签名，一些视频需要安装 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 才能稳定读取。干净截图和无字幕转录还需要安装 [ffmpeg](https://ffmpeg.org/)。安装后可让两个 command 设置保持为空自动检测，也可以填写完整路径。
+
+如果视频既没有人工 CC，也没有 YouTube 自动字幕，可在 `No-caption transcription` 中选择 Groq Whisper 或 OpenAI Whisper。插件会临时下载并压缩音频，调用带时间戳的语音转文字接口，再生成可跟随播放的逐句字幕。需要在设置中填写 Groq API key，或者使用已有的 OpenAI API key；不希望上传音频时请选择 `Disabled`。临时音频会在转录结束后删除。
+
+字幕和译文会以 YouTube video ID、字幕内容、源语言、目标语言和自定义提示词为键保存在插件本地缓存中。以后再次打开并翻译同一个视频时，精确命中缓存就不会再次调用 AI，token 消耗为 0。翻译过程中每完成一批也会立即保存，因此中途停止后可从已完成处继续。缓存保留最近使用的 30 个视频；只有主动点击 Refresh、字幕内容改变或修改语言/提示词时，才可能产生新的请求。
+
+`YouTube screenshot display width` 控制截图插入笔记后的显示宽度，范围为 100–2000 px；原始 PNG 分辨率不会因此降低。
 
 如果视频作者关闭了“允许在其他网站播放”，插件无法绕过 YouTube 的限制。此时可以点 External link 去 YouTube 观看；字幕提取和 transcript note 仍可能可用。
 

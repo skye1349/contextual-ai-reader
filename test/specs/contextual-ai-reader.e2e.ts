@@ -106,6 +106,33 @@ describe("Contextual AI Reader in Obsidian", function () {
     expect(note).toContain("- tags:: #vocabulary #language/ja #status/new");
   });
 
+  it("reuses an exact YouTube transcript translation from local cache", async function () {
+    const result = await browser.executeObsidian(async ({ app }) => {
+      const plugin = app.plugins.plugins["contextual-ai-reader"];
+      plugin.settings.sourceLanguage = "en";
+      plugin.settings.targetLanguage = "zh-CN";
+      plugin.settings.customPrompt = "Cache test";
+      const data = {
+        title: "Cache test video",
+        videoId: "cacheTest01A",
+        segments: [{ start: 3, duration: 2, text: "A durable local cache." }]
+      };
+      await plugin.cacheYouTubeTranscript(data);
+      const key = plugin.getYouTubeTranslationCacheKey(data);
+      await plugin.cacheYouTubeTranslation(data, key, ["持久的本地缓存。"]);
+      const cached = await plugin.getCachedYouTubeVideo(data.videoId);
+      plugin.settings.targetLanguage = "ja";
+      const changedLanguage = await plugin.getCachedYouTubeVideo(data.videoId);
+      return {
+        exact: cached?.segments?.[0]?.translation ?? "",
+        changedLanguage: changedLanguage?.segments?.[0]?.translation ?? ""
+      };
+    });
+
+    expect(result.exact).toBe("持久的本地缓存。");
+    expect(result.changedLanguage).toBe("");
+  });
+
   (process.env.YOUTUBE_E2E ? it : it.skip)("opens a real YouTube learning player and extracts sentence-level captions", async function () {
     const result = await browser.executeObsidian(async ({ app }) => {
       const plugin = app.plugins.plugins["contextual-ai-reader"];
@@ -139,6 +166,9 @@ describe("Contextual AI Reader in Obsidian", function () {
         await plugin.captureYouTubeFrame(view);
         await plugin.createYouTubeTranscriptNote(data);
       }
+      const noticeText = Array.from(document.querySelectorAll(".notice"))
+        .map((element) => element.textContent ?? "")
+        .join(" | ");
       const screenshot = app.vault.getFiles().find((file) => file.extension === "png");
       const transcript = app.vault.getFiles().find((file) => file.path.endsWith("Transcript.md"));
       const transcriptText = transcript ? await app.vault.read(transcript) : "";
@@ -154,6 +184,7 @@ describe("Contextual AI Reader in Obsidian", function () {
           : "",
         bounds: bounds ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height } : null,
         viewport: { width: window.innerWidth, height: window.innerHeight },
+        noticeText,
         transcriptHasTimestamp: transcriptText.includes("obsidian://contextual-ai-reader-youtube?video=")
       };
     });
