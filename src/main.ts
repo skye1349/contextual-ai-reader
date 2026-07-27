@@ -32,6 +32,19 @@ import {
   parseYouTubeJson3,
   sanitizeFileName
 } from "./youtube";
+import {
+  SharedMemoryDocument,
+  SharedMemoryItem,
+  SharedMemoryRequest,
+  SharedTranslationMemory
+} from "./shared-memory";
+
+declare const __CCLT_PRIVATE_SHARED_MEMORY__: boolean;
+
+const PRIVATE_SHARED_MEMORY_BUILD = (
+  typeof __CCLT_PRIVATE_SHARED_MEMORY__ !== "undefined"
+  && __CCLT_PRIVATE_SHARED_MEMORY__
+);
 
 type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
 type InsertMode = "replace" | "append";
@@ -65,6 +78,8 @@ interface ContextualAIReaderSettings {
   speechLanguage: string;
   speechRate: number;
   sourceLanguage: string;
+  sharedMemoryCommand: string;
+  sharedMemoryEnabled: boolean;
   targetLanguage: string;
   timeoutSeconds: number;
   vocabularyCache: Record<string, VocabularyCacheEntry>;
@@ -104,6 +119,8 @@ const DEFAULT_SETTINGS: ContextualAIReaderSettings = {
   speechLanguage: "en-US",
   speechRate: 0.92,
   sourceLanguage: "auto",
+  sharedMemoryCommand: "",
+  sharedMemoryEnabled: PRIVATE_SHARED_MEMORY_BUILD,
   targetLanguage: "zh-CN",
   timeoutSeconds: 90,
   vocabularyCache: {},
@@ -360,6 +377,11 @@ interface TokenUsage {
   reasoningOutput: number;
 }
 
+interface TranslationCacheValue {
+  provider: string;
+  translation: string;
+}
+
 interface VocabularyCacheEntry {
   baseDefinition?: string;
   contextExplanation?: string;
@@ -424,7 +446,8 @@ export default class ContextualAIReaderPlugin extends Plugin {
   private popupRect?: DOMRect;
   private requestSerial = 0;
   private statusBarEl?: HTMLElement;
-  private translationCache = new Map<string, string>();
+  private sharedMemory = new SharedTranslationMemory();
+  private translationCache = new Map<string, TranslationCacheValue>();
   private lastMarkdownLeaf?: WorkspaceLeaf;
 
   async onload() {
@@ -467,6 +490,16 @@ export default class ContextualAIReaderPlugin extends Plugin {
         void this.checkCodexLogin();
       }
     });
+
+    if (PRIVATE_SHARED_MEMORY_BUILD) {
+      this.addCommand({
+        id: "check-shared-translation-memory",
+        name: "Check shared translation memory",
+        callback: () => {
+          void this.checkSharedTranslationMemory();
+        }
+      });
+    }
 
     this.addCommand({
       id: "translate-current-file-to-chinese",
@@ -621,10 +654,18 @@ export default class ContextualAIReaderPlugin extends Plugin {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, isRecord(loadedData) ? loadedData : {});
     this.settings.vocabularyCache = { ...(this.settings.vocabularyCache ?? {}) };
     this.settings.youtubeCache = { ...(this.settings.youtubeCache ?? {}) };
+    this.configureSharedMemory();
   }
 
   async saveSettings() {
     await this.saveData(this.settings);
+  }
+
+  configureSharedMemory() {
+    this.sharedMemory.configure({
+      command: this.settings.sharedMemoryCommand,
+      enabled: PRIVATE_SHARED_MEMORY_BUILD && this.settings.sharedMemoryEnabled
+    });
   }
 
   private handleSelectionChange() {
@@ -691,7 +732,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
     const cached = this.translationCache.get(translationCacheKey);
 
     if (cached) {
-      this.showPopup(cached, sourceText, rect, "done");
+      this.showPopup(cached.translation, sourceText, rect, "done", undefined, cached.provider);
       this.addPopupRefineButton(sourceText, rect, requestId);
       return;
     }
@@ -700,12 +741,28 @@ export default class ContextualAIReaderPlugin extends Plugin {
     this.showPopupLoading("Translating…", rect, () => { this.hidePopup(); });
 
     try {
-      const quickResult = await googleTranslate(sourceText, this.settings.targetLanguage, this.settings.sourceLanguage);
+      const id = "selection";
+      const values = await this.translateItemsWithSharedMemory({
+        contentType: "selection",
+        document: this.getSharedMemoryDocument("obsidian-selection"),
+        execute: async () => ({
+          [id]: await googleTranslate(
+            sourceText,
+            this.settings.targetLanguage,
+            this.settings.sourceLanguage
+          )
+        }),
+        items: [{ id, text: sourceText }],
+        model: "google-translate",
+        provider: "google",
+        sourceLanguage: this.resolveSharedSourceLanguage([sourceText])
+      });
+      const quickResult = String(values[id] || "").trim();
       if (requestId !== this.requestSerial) return;
       if (!quickResult) throw new Error("Empty response from Google Translate.");
 
-      this.rememberTranslation(translationCacheKey, quickResult);
-      this.showPopup(quickResult, sourceText, rect, "done");
+      this.rememberTranslation(translationCacheKey, quickResult, "google");
+      this.showPopup(quickResult, sourceText, rect, "done", undefined, "google");
       this.addPopupRefineButton(sourceText, rect, requestId);
     } catch {
       // Google Translate unavailable — fall back to AI directly
@@ -828,12 +885,24 @@ export default class ContextualAIReaderPlugin extends Plugin {
     }, 1000);
 
     try {
+      const provider = this.getSharedMemoryProvider();
       const translation = (await this.runAITranslation(sourceText)).trim();
       window.clearInterval(timerInterval);
       if (requestId !== this.requestSerial) return;
       if (!translation) throw new Error(`${backendLabel} returned an empty translation.`);
-      this.rememberTranslation(this.buildTranslationCacheKey(sourceText), translation);
-      this.showPopup(translation, sourceText, rect, "done", this.getCurrentTokenUsage());
+      this.rememberTranslation(
+        this.buildTranslationCacheKey(sourceText),
+        translation,
+        provider
+      );
+      this.showPopup(
+        translation,
+        sourceText,
+        rect,
+        "done",
+        this.getCurrentTokenUsage(),
+        provider
+      );
       this.addPopupRefineButton(sourceText, rect, requestId);
     } catch (error) {
       window.clearInterval(timerInterval);
@@ -948,7 +1017,12 @@ export default class ContextualAIReaderPlugin extends Plugin {
     this.setStatus(`${backendLabel} translating file...`);
 
     try {
-      const translatedContent = await this.translateMarkdownDocument(sourceText, overlay, "current file");
+      const translatedContent = await this.translateMarkdownDocument(
+        sourceText,
+        overlay,
+        "current file",
+        file
+      );
 
       if (!translatedContent.fullText.trim()) {
         throw new Error("AI returned an empty translation.");
@@ -1036,7 +1110,12 @@ export default class ContextualAIReaderPlugin extends Plugin {
             continue;
           }
 
-          const translatedContent = await this.translateMarkdownDocument(sourceText, overlay, fileLabel);
+          const translatedContent = await this.translateMarkdownDocument(
+            sourceText,
+            overlay,
+            fileLabel,
+            file
+          );
 
           if (!translatedContent.fullText.trim()) {
             throw new Error(`${backendLabel} returned an empty translation.`);
@@ -1131,6 +1210,26 @@ export default class ContextualAIReaderPlugin extends Plugin {
     } catch (error) {
       new Notice(`Codex login check failed: ${getErrorMessage(error)}`);
     }
+  }
+
+  async checkSharedTranslationMemory() {
+    if (!PRIVATE_SHARED_MEMORY_BUILD) {
+      new Notice("Shared translation memory is not included in this public build.");
+      return;
+    }
+    this.configureSharedMemory();
+    const status = await this.sharedMemory.status();
+    if (!status?.databasePath) {
+      new Notice(
+        `Shared translation memory is unavailable. Install or configure: ${this.sharedMemory.commandPath}`,
+        10000
+      );
+      return;
+    }
+    new Notice(
+      `Shared SQLite connected: ${status.translationRecords ?? 0} translations, ${status.trustedRecords ?? 0} trusted.\n${status.databasePath}`,
+      12000
+    );
   }
 
   private async speakText(sourceText: string) {
@@ -1261,7 +1360,12 @@ export default class ContextualAIReaderPlugin extends Plugin {
       for (let start = translations.length; start < segments.length; start += batchSize) {
         if (this.isCancelled) throw new Error("Translation stopped.");
         const batch = segments.slice(start, start + batchSize);
-        const translated = await this.translateYouTubeBatch(batch, data.sourceLanguage);
+        const translated = await this.translateYouTubeBatch(
+          batch,
+          data.sourceLanguage,
+          data,
+          start
+        );
         translations.push(...translated);
         await this.cacheYouTubeTranslation(data, cacheKey, translations);
         onProgress(Math.min(start + batch.length, segments.length), segments.length, translations);
@@ -1518,7 +1622,64 @@ export default class ContextualAIReaderPlugin extends Plugin {
     }
   }
 
-  private async translateYouTubeBatch(segments: YouTubeSegment[], detectedSourceLanguage?: string): Promise<string[]> {
+  private async translateYouTubeBatch(
+    segments: YouTubeSegment[],
+    detectedSourceLanguage: string | undefined,
+    data: YouTubeVideoData,
+    startIndex: number
+  ): Promise<string[]> {
+    const items = segments.map((segment, index) => {
+      const absoluteIndex = startIndex + index;
+      return {
+        contextAfter: String(data.segments[absoluteIndex + 1]?.text || ""),
+        contextBefore: String(data.segments[absoluteIndex - 1]?.text || ""),
+        id: `youtube:${data.videoId}:${absoluteIndex}`,
+        index: absoluteIndex,
+        locator: { timestamp: segment.start },
+        startTime: segment.start,
+        text: segment.text
+      };
+    });
+    const translations = await this.translateItemsWithSharedMemory({
+      contentType: "video-subtitles",
+      document: {
+        domain: "www.youtube.com",
+        id: data.videoId,
+        title: data.title,
+        type: "obsidian-youtube",
+        url: `https://www.youtube.com/watch?v=${data.videoId}`
+      },
+      execute: async (missing) => {
+        const generated: Record<string, string> = {};
+        for (const run of groupConsecutiveMemoryItems(missing)) {
+          const missingSegments = run.map((item) => ({
+            duration: data.segments[item.index || 0]?.duration || 0,
+            start: item.startTime || 0,
+            text: item.text
+          }));
+          const values = await this.translateRawYouTubeBatch(
+            missingSegments,
+            detectedSourceLanguage
+          );
+          run.forEach((item, index) => {
+            generated[item.id] = values[index] || "";
+          });
+        }
+        return generated;
+      },
+      items,
+      sourceLanguage: this.resolveSharedSourceLanguage(
+        segments.map((segment) => segment.text),
+        detectedSourceLanguage
+      )
+    });
+    return items.map((item) => String(translations[item.id] || ""));
+  }
+
+  private async translateRawYouTubeBatch(
+    segments: YouTubeSegment[],
+    detectedSourceLanguage?: string
+  ): Promise<string[]> {
     const target = getLanguagePromptName(this.settings.targetLanguage);
     const source = this.settings.sourceLanguage === "auto" && detectedSourceLanguage
       ? getLanguagePromptName(detectedSourceLanguage)
@@ -1542,12 +1703,18 @@ export default class ContextualAIReaderPlugin extends Plugin {
       return parseStringArray(raw, segments.length);
     } catch (error) {
       if (segments.length === 1) {
-        return [(await this.runAITranslation(segments[0].text)).trim()];
+        return [(await this.runRawAITranslation(segments[0].text)).trim()];
       }
       console.warn("YouTube transcript batch returned invalid JSON; retrying smaller batches.", error);
       const midpoint = Math.ceil(segments.length / 2);
-      const left = await this.translateYouTubeBatch(segments.slice(0, midpoint), detectedSourceLanguage);
-      const right = await this.translateYouTubeBatch(segments.slice(midpoint), detectedSourceLanguage);
+      const left = await this.translateRawYouTubeBatch(
+        segments.slice(0, midpoint),
+        detectedSourceLanguage
+      );
+      const right = await this.translateRawYouTubeBatch(
+        segments.slice(midpoint),
+        detectedSourceLanguage
+      );
       return [...left, ...right];
     }
   }
@@ -1668,11 +1835,144 @@ export default class ContextualAIReaderPlugin extends Plugin {
     view.requestSave();
   }
 
-  private async runAITranslation(sourceText: string, onChunk?: (text: string) => void): Promise<string> {
+  private async runAITranslation(
+    sourceText: string,
+    onChunk?: (text: string) => void,
+    forceRefresh = false
+  ): Promise<string> {
+    const id = "selection";
+    const translations = await this.translateItemsWithSharedMemory({
+      contentType: "selection",
+      document: this.getSharedMemoryDocument("obsidian-selection"),
+      execute: async (items) => ({
+        [id]: await this.runRawAITranslation(items[0]?.text || sourceText, onChunk)
+      }),
+      forceRefresh,
+      items: [{ id, text: sourceText }],
+      sourceLanguage: this.resolveSharedSourceLanguage([sourceText])
+    });
+    return String(translations[id] || "");
+  }
+
+  private async runRawAITranslation(
+    sourceText: string,
+    onChunk?: (text: string) => void
+  ): Promise<string> {
     return await this.runAIPrompt(
-      buildTranslationPrompt(sourceText, this.settings.customPrompt, this.settings.targetLanguage, this.settings.sourceLanguage),
+      buildTranslationPrompt(
+        sourceText,
+        this.settings.customPrompt,
+        this.settings.targetLanguage,
+        this.settings.sourceLanguage
+      ),
       onChunk
     );
+  }
+
+  private async translateItemsWithSharedMemory({
+    contentType,
+    document,
+    execute,
+    forceRefresh = false,
+    items,
+    model,
+    provider,
+    sourceLanguage
+  }: {
+    contentType: SharedMemoryRequest["contentType"];
+    document: SharedMemoryDocument;
+    execute: (items: SharedMemoryItem[]) => Promise<Record<string, string>>;
+    forceRefresh?: boolean;
+    items: SharedMemoryItem[];
+    model?: string;
+    provider?: string;
+    sourceLanguage: string;
+  }): Promise<Record<string, string>> {
+    const memoryProvider = provider || this.getSharedMemoryProvider();
+    const request: SharedMemoryRequest = {
+      contentType,
+      customPrompt: this.settings.customPrompt,
+      document,
+      items,
+      memoryEnabled: PRIVATE_SHARED_MEMORY_BUILD && this.settings.sharedMemoryEnabled,
+      pageUrl: document.url || "",
+      provider: memoryProvider,
+      sourceLanguage,
+      targetLanguage: this.settings.targetLanguage
+    };
+    const lookup = forceRefresh ? null : await this.sharedMemory.lookup(request);
+    const translations = { ...(lookup?.translations ?? {}) };
+    const missing = items.filter((item) => !String(translations[item.id] || "").trim());
+    if (!missing.length) return translations;
+
+    const generated = await execute(missing);
+    missing.forEach((item) => {
+      const value = String(generated[item.id] || "").trim();
+      if (value) translations[item.id] = value;
+    });
+    const recorded = Object.fromEntries(
+      missing
+        .map((item) => [item.id, translations[item.id]])
+        .filter((entry): entry is [string, string] => Boolean(entry[1]))
+    );
+    if (Object.keys(recorded).length) {
+      await this.sharedMemory.record({
+        model: model ?? this.getSharedMemoryModel(memoryProvider),
+        provenance: `obsidian-${memoryProvider}`,
+        request: {
+          ...request,
+          items: missing
+        },
+        translations: recorded
+      });
+    }
+    return translations;
+  }
+
+  private getSharedMemoryProvider(): string {
+    return {
+      anthropic: "anthropic",
+      claude: "local-claude",
+      codex: "local-codex",
+      openai: "openai"
+    }[this.getEffectiveBackend()] || "local-codex";
+  }
+
+  private getSharedMemoryModel(provider: string): string {
+    if (provider === "local-codex") return this.settings.model;
+    if (provider === "local-claude") return this.settings.claudeModel;
+    if (provider === "openai") return this.settings.openaiModel;
+    if (provider === "anthropic") return this.settings.anthropicModel;
+    return "";
+  }
+
+  private getSharedMemoryDocument(type: string, sourceFile?: TFile): SharedMemoryDocument {
+    const file = sourceFile || this.app.workspace.getActiveFile();
+    const filePath = file?.path || "";
+    const vault = this.app.vault.getName();
+    const url = filePath
+      ? `obsidian://open?vault=${encodeURIComponent(vault)}&file=${encodeURIComponent(filePath)}`
+      : "";
+    return {
+      domain: "obsidian",
+      id: filePath ? `${vault}:${filePath}` : vault,
+      title: file?.basename || vault,
+      type,
+      url
+    };
+  }
+
+  private resolveSharedSourceLanguage(texts: string[], detectedLanguage = ""): string {
+    if (this.settings.sourceLanguage !== "auto") return this.settings.sourceLanguage;
+    if (detectedLanguage) return detectedLanguage;
+    const text = texts.join(" ").slice(0, 4000);
+    if (/[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(text)) return "ja";
+    if (/\p{Script=Hangul}/u.test(text)) return "ko";
+    if (/\p{Script=Han}/u.test(text)) return "zh-CN";
+    if (/\p{Script=Arabic}/u.test(text)) return "ar";
+    if (/\p{Script=Cyrillic}/u.test(text)) return "ru";
+    if (/[A-Za-z]/.test(text)) return "en";
+    return "auto";
   }
 
   private async runAIPrompt(prompt: string, onChunk?: (text: string) => void): Promise<string> {
@@ -1940,7 +2240,8 @@ export default class ContextualAIReaderPlugin extends Plugin {
   private async translateMarkdownDocument(
     sourceText: string,
     overlay: TranslationProgressOverlay,
-    progressLabel: string
+    progressLabel: string,
+    sourceFile: TFile
   ): Promise<{ blocks: MarkdownBlock[]; fullText: string; translations: string[]; units: TranslationUnit[] }> {
     const backendLabel = this.getBackendLabel();
     const { body } = extractFrontmatter(sourceText);
@@ -1967,7 +2268,12 @@ export default class ContextualAIReaderPlugin extends Plugin {
       const onChunk = (chunk: string) => overlay.appendChunk(chunk);
       overlay.setStatus(`${progressLabel} · 0/${units.length} units · single request`);
       this.setStatus(`${backendLabel} ${progressLabel} 0/${units.length}`);
-      translations = await this.translateBlockBatch(units.map((unit) => unit.text), onChunk);
+      translations = await this.translateBlockBatch(
+        units.map((unit) => unit.text),
+        onChunk,
+        sourceFile,
+        0
+      );
       if (this.isCancelled) throw new Error("Translation stopped.");
       overlay.setStatus(`${progressLabel} · ${units.length}/${units.length} units · inserting`);
     } else {
@@ -2001,7 +2307,12 @@ export default class ContextualAIReaderPlugin extends Plugin {
           if (!item) break;
           inFlight++;
           updateStatus(item.batch);
-          results[item.i] = await this.translateBlockBatch(item.batch.units.map((unit) => unit.text));
+          results[item.i] = await this.translateBlockBatch(
+            item.batch.units.map((unit) => unit.text),
+            undefined,
+            sourceFile,
+            item.batch.startUnit
+          );
           inFlight--;
           completed++;
           completedUnits += item.batch.units.length;
@@ -2023,7 +2334,42 @@ export default class ContextualAIReaderPlugin extends Plugin {
     };
   }
 
-  private async translateBlockBatch(blockTexts: string[], onChunk?: (chunk: string) => void): Promise<string[]> {
+  private async translateBlockBatch(
+    blockTexts: string[],
+    onChunk?: (chunk: string) => void,
+    sourceFile?: TFile,
+    startOrder = 0
+  ): Promise<string[]> {
+    if (this.isCancelled) throw new Error("Translation stopped.");
+
+    const items = blockTexts.map((text, index) => ({
+      id: `markdown-block:${startOrder + index}`,
+      index: startOrder + index,
+      locator: { order: startOrder + index },
+      text
+    }));
+    const translations = await this.translateItemsWithSharedMemory({
+      contentType: "webpage",
+      document: this.getSharedMemoryDocument("obsidian-markdown", sourceFile),
+      execute: async (missing) => {
+        const values = await this.translateRawBlockBatch(
+          missing.map((item) => item.text),
+          onChunk
+        );
+        return Object.fromEntries(
+          missing.map((item, index) => [item.id, values[index] || ""])
+        );
+      },
+      items,
+      sourceLanguage: this.resolveSharedSourceLanguage(blockTexts)
+    });
+    return items.map((item) => String(translations[item.id] || ""));
+  }
+
+  private async translateRawBlockBatch(
+    blockTexts: string[],
+    onChunk?: (chunk: string) => void
+  ): Promise<string[]> {
     if (this.isCancelled) throw new Error("Translation stopped.");
 
     const prompt = buildBlockTranslationPrompt(blockTexts, this.settings.customPrompt, this.settings.targetLanguage, this.settings.sourceLanguage);
@@ -2038,12 +2384,12 @@ export default class ContextualAIReaderPlugin extends Plugin {
       console.warn("Block translation had the wrong delimiter count; retrying with smaller batches.", error);
 
       if (blockTexts.length === 1) {
-        return [(await this.runAITranslation(blockTexts[0])).trim()];
+        return [(await this.runRawAITranslation(blockTexts[0])).trim()];
       }
 
       const midpoint = Math.ceil(blockTexts.length / 2);
-      const left = await this.translateBlockBatch(blockTexts.slice(0, midpoint), onChunk);
-      const right = await this.translateBlockBatch(blockTexts.slice(midpoint), onChunk);
+      const left = await this.translateRawBlockBatch(blockTexts.slice(0, midpoint), onChunk);
+      const right = await this.translateRawBlockBatch(blockTexts.slice(midpoint), onChunk);
       return [...left, ...right];
     }
   }
@@ -2236,8 +2582,8 @@ export default class ContextualAIReaderPlugin extends Plugin {
     return `${this.settings.sourceLanguage}:${this.settings.targetLanguage}:${sourceText}`;
   }
 
-  private rememberTranslation(cacheKey: string, translation: string) {
-    this.translationCache.set(cacheKey, translation);
+  private rememberTranslation(cacheKey: string, translation: string, provider: string) {
+    this.translationCache.set(cacheKey, { provider, translation });
 
     if (this.translationCache.size > 30) {
       const oldestKey = this.translationCache.keys().next().value;
@@ -2414,7 +2760,8 @@ export default class ContextualAIReaderPlugin extends Plugin {
     sourceText: string,
     rect: DOMRect,
     state: "loading" | "done" | "error",
-    tokenUsage?: TokenUsage
+    tokenUsage?: TokenUsage,
+    provider = ""
   ) {
     const popup = this.ensurePopup();
     popup.empty();
@@ -2444,6 +2791,53 @@ export default class ContextualAIReaderPlugin extends Plugin {
       void this.saveExcerpt(sourceText, state === "done" ? text : undefined);
     }));
 
+    if (
+      state === "done"
+      && PRIVATE_SHARED_MEMORY_BUILD
+      && this.settings.sharedMemoryEnabled
+    ) {
+      const memoryProvider = provider || this.getSharedMemoryProvider();
+      actions.appendChild(this.createIconButton("check", "Accept and remember translation", () => {
+        void this.recordPopupFeedback(
+          sourceText,
+          text,
+          memoryProvider,
+          "accepted"
+        );
+      }));
+
+      actions.appendChild(this.createIconButton("pencil", "Edit and remember translation", () => {
+        new TranslationFeedbackEditModal(this.app, text, (corrected) => {
+          void this.recordPopupFeedback(
+            sourceText,
+            text,
+            memoryProvider,
+            "edited",
+            corrected
+          ).then((saved) => {
+            if (!saved) return;
+            this.rememberTranslation(
+              this.buildTranslationCacheKey(sourceText),
+              corrected,
+              memoryProvider
+            );
+            this.showPopup(corrected, sourceText, rect, "done", undefined, memoryProvider);
+          });
+        }).open();
+      }));
+
+      actions.appendChild(this.createIconButton("x", "Reject this translation", () => {
+        new TranslationFeedbackConfirmationModal(this.app, () => {
+          void this.recordPopupFeedback(
+            sourceText,
+            text,
+            memoryProvider,
+            "rejected"
+          );
+        }).open();
+      }));
+    }
+
     if (state === "done") {
       actions.appendChild(this.createIconButton("copy", "Copy translation", () => {
         void navigator.clipboard.writeText(text);
@@ -2454,6 +2848,44 @@ export default class ContextualAIReaderPlugin extends Plugin {
     popup.appendChild(actions);
     popup.removeClass("is-hidden");
     this.positionPopup(rect);
+  }
+
+  private async recordPopupFeedback(
+    sourceText: string,
+    translation: string,
+    provider: string,
+    feedbackType: "accepted" | "edited" | "rejected",
+    correctedTranslation = ""
+  ): Promise<boolean> {
+    const document = this.getSharedMemoryDocument("obsidian-selection");
+    const response = await this.sharedMemory.feedback({
+      contentType: "selection",
+      correctedTranslation,
+      customPrompt: this.settings.customPrompt,
+      document,
+      feedbackType,
+      item: { id: "selection", text: sourceText },
+      memoryEnabled: PRIVATE_SHARED_MEMORY_BUILD && this.settings.sharedMemoryEnabled,
+      model: this.getSharedMemoryModel(provider),
+      pageUrl: document.url || "",
+      provider,
+      sourceLanguage: this.resolveSharedSourceLanguage([sourceText]),
+      targetLanguage: this.settings.targetLanguage,
+      translation
+    });
+    if (!response) {
+      new Notice("Shared translation memory is unavailable; the feedback was not saved.");
+      return false;
+    }
+    if (feedbackType === "rejected") {
+      this.translationCache.delete(this.buildTranslationCacheKey(sourceText));
+    }
+    new Notice({
+      accepted: "Translation accepted and saved to shared memory.",
+      edited: "Corrected translation saved to shared memory.",
+      rejected: "Rejected translation saved as negative feedback."
+    }[feedbackType]);
+    return true;
   }
 
   private createIconButton(icon: string, label: string, onClick: () => void): HTMLButtonElement {
@@ -2614,6 +3046,79 @@ class TranslationProgressOverlay {
   }
 }
 
+class TranslationFeedbackEditModal extends Modal {
+  constructor(
+    app: App,
+    private readonly initialTranslation: string,
+    private readonly onSubmitTranslation: (translation: string) => void
+  ) {
+    super(app);
+  }
+
+  onOpen() {
+    this.setTitle("Edit translation");
+    this.contentEl.empty();
+
+    const textarea = this.contentEl.createEl("textarea");
+    textarea.className = "contextual-ai-reader-batch-input";
+    textarea.value = this.initialTranslation;
+
+    const actions = this.contentEl.createDiv({
+      cls: "contextual-ai-reader-batch-actions"
+    });
+    const cancelButton = actions.createEl("button", { text: "Cancel" });
+    cancelButton.addEventListener("click", () => this.close());
+
+    const saveButton = actions.createEl("button", {
+      cls: "mod-cta",
+      text: "Save correction"
+    });
+    saveButton.addEventListener("click", () => {
+      const corrected = textarea.value.trim();
+      if (!corrected || corrected === this.initialTranslation) return;
+      this.close();
+      this.onSubmitTranslation(corrected);
+    });
+
+    window.setTimeout(() => {
+      textarea.focus();
+      textarea.select();
+    }, 0);
+  }
+}
+
+class TranslationFeedbackConfirmationModal extends Modal {
+  constructor(
+    app: App,
+    private readonly onConfirm: () => void
+  ) {
+    super(app);
+  }
+
+  onOpen() {
+    this.setTitle("Reject translation");
+    this.contentEl.empty();
+    this.contentEl.createEl("p", {
+      text: "Reject this translation and prevent it from being trusted?"
+    });
+
+    const actions = this.contentEl.createDiv({
+      cls: "contextual-ai-reader-batch-actions"
+    });
+    const cancelButton = actions.createEl("button", { text: "Cancel" });
+    cancelButton.addEventListener("click", () => this.close());
+
+    const rejectButton = actions.createEl("button", {
+      cls: "mod-warning",
+      text: "Reject"
+    });
+    rejectButton.addEventListener("click", () => {
+      this.close();
+      this.onConfirm();
+    });
+  }
+}
+
 class BatchScopeModal extends Modal {
   constructor(
     app: App,
@@ -2708,6 +3213,45 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
             this.display();
           })
       );
+
+    if (PRIVATE_SHARED_MEMORY_BUILD) {
+      new Setting(containerEl)
+        .setName("Private shared translation memory")
+        .setDesc("Reuse this Mac's CC Live Translator SQLite memory. A miss still uses the selected AI backend.")
+        .addToggle((toggle) =>
+          toggle
+            .setValue(this.plugin.settings.sharedMemoryEnabled)
+            .onChange(async (value) => {
+              this.plugin.settings.sharedMemoryEnabled = value;
+              this.plugin.configureSharedMemory();
+              await this.plugin.saveSettings();
+              this.display();
+            })
+        )
+        .addButton((button) =>
+          button
+            .setButtonText("Check")
+            .onClick(() => {
+              void this.plugin.checkSharedTranslationMemory();
+            })
+        );
+
+      if (this.plugin.settings.sharedMemoryEnabled) {
+        new Setting(containerEl)
+          .setName("Shared memory command")
+          .setDesc("Leave empty to use ~/Library/CCLiveTranslator/bin/cclt-shared-memory.")
+          .addText((text) =>
+            text
+              .setPlaceholder("~/Library/CCLiveTranslator/bin/cclt-shared-memory")
+              .setValue(this.plugin.settings.sharedMemoryCommand)
+              .onChange(async (value) => {
+                this.plugin.settings.sharedMemoryCommand = value.trim();
+                this.plugin.configureSharedMemory();
+                await this.plugin.saveSettings();
+              })
+          );
+      }
+    }
 
     if (this.plugin.settings.aiBackend === "auto" || this.plugin.settings.aiBackend === "claude") {
       new Setting(containerEl)
@@ -3722,6 +4266,26 @@ function parseTranslationArray(rawResult: string, expectedLength: number): strin
   }
 
   throw new Error(`Expected ${expectedLength} blocks but got ${parts.length}.`);
+}
+
+function groupConsecutiveMemoryItems(
+  items: SharedMemoryItem[]
+): SharedMemoryItem[][] {
+  const groups: SharedMemoryItem[][] = [];
+  items.forEach((item) => {
+    const current = groups[groups.length - 1];
+    const previous = current?.[current.length - 1];
+    if (
+      !current
+      || !previous
+      || Number(item.index) !== Number(previous.index) + 1
+    ) {
+      groups.push([item]);
+    } else {
+      current.push(item);
+    }
+  });
+  return groups;
 }
 
 function appendDocumentTranslation(sourceText: string, translatedText: string): string {
