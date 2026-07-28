@@ -40,4 +40,6 @@ test("routes every translation surface through the shared-memory wrapper", async
   assert.match(source, /runAITranslation[\s\S]+translateItemsWithSharedMemory/);
   assert.match(source, /translateYouTubeBatch[\s\S]+translateItemsWithSharedMemory/);
   assert.match(source, /translateBlockBatch[\s\S]+translateItemsWithSharedMemory/);
+  assert.match(source, /lookup\?\.guidanceByItem/);
+  assert.match(source, /formatSharedCorpusGuidance/);
 });

@@ -34,6 +34,7 @@ import {
 } from "./youtube";
 import {
   SharedMemoryDocument,
+  SharedMemoryGuidance,
   SharedMemoryItem,
   SharedMemoryRequest,
   SharedTranslationMemory
@@ -45,6 +46,24 @@ const PRIVATE_SHARED_MEMORY_BUILD = (
   typeof __CCLT_PRIVATE_SHARED_MEMORY__ !== "undefined"
   && __CCLT_PRIVATE_SHARED_MEMORY__
 );
+
+function formatSharedCorpusGuidance(entries: SharedMemoryGuidance[]): string {
+  const seen = new Set<string>();
+  const selected = entries.filter((entry) => {
+    const source = String(entry.source || "").normalize("NFKC").toLocaleLowerCase().trim();
+    if (!source || !entry.target || seen.has(source)) return false;
+    seen.add(source);
+    return true;
+  }).slice(0, 20);
+  if (!selected.length) return "";
+  return [
+    "Preferred contextual terminology from the private local SQLite corpus.",
+    "Use each suggestion only when its noted sense fits; preserve full-sentence fluency and do not mechanically substitute fragments.",
+    ...selected.map((entry) => (
+      `${entry.source} => ${entry.target}${entry.note ? ` (${entry.note})` : ""}`
+    ))
+  ].join("\n");
+}
 
 type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
 type InsertMode = "replace" | "append";
@@ -1649,7 +1668,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
         type: "obsidian-youtube",
         url: `https://www.youtube.com/watch?v=${data.videoId}`
       },
-      execute: async (missing) => {
+      execute: async (missing, corpusGuidance) => {
         const generated: Record<string, string> = {};
         for (const run of groupConsecutiveMemoryItems(missing)) {
           const missingSegments = run.map((item) => ({
@@ -1659,7 +1678,8 @@ export default class ContextualAIReaderPlugin extends Plugin {
           }));
           const values = await this.translateRawYouTubeBatch(
             missingSegments,
-            detectedSourceLanguage
+            detectedSourceLanguage,
+            corpusGuidance
           );
           run.forEach((item, index) => {
             generated[item.id] = values[index] || "";
@@ -1678,7 +1698,8 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
   private async translateRawYouTubeBatch(
     segments: YouTubeSegment[],
-    detectedSourceLanguage?: string
+    detectedSourceLanguage?: string,
+    corpusGuidance = ""
   ): Promise<string[]> {
     const target = getLanguagePromptName(this.settings.targetLanguage);
     const source = this.settings.sourceLanguage === "auto" && detectedSourceLanguage
@@ -1695,6 +1716,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
       "Return only one valid JSON array of translated strings in the same order and with exactly the same number of items.",
       "Do not include timestamps, IDs, Markdown, commentary, or code fences.",
       this.settings.customPrompt.trim() ? `Additional context: ${this.settings.customPrompt.trim()}` : "",
+      corpusGuidance,
       JSON.stringify(transcript)
     ].filter(Boolean).join("\n\n");
 
@@ -1709,11 +1731,13 @@ export default class ContextualAIReaderPlugin extends Plugin {
       const midpoint = Math.ceil(segments.length / 2);
       const left = await this.translateRawYouTubeBatch(
         segments.slice(0, midpoint),
-        detectedSourceLanguage
+        detectedSourceLanguage,
+        corpusGuidance
       );
       const right = await this.translateRawYouTubeBatch(
         segments.slice(midpoint),
-        detectedSourceLanguage
+        detectedSourceLanguage,
+        corpusGuidance
       );
       return [...left, ...right];
     }
@@ -1844,8 +1868,12 @@ export default class ContextualAIReaderPlugin extends Plugin {
     const translations = await this.translateItemsWithSharedMemory({
       contentType: "selection",
       document: this.getSharedMemoryDocument("obsidian-selection"),
-      execute: async (items) => ({
-        [id]: await this.runRawAITranslation(items[0]?.text || sourceText, onChunk)
+      execute: async (items, corpusGuidance) => ({
+        [id]: await this.runRawAITranslation(
+          items[0]?.text || sourceText,
+          onChunk,
+          corpusGuidance
+        )
       }),
       forceRefresh,
       items: [{ id, text: sourceText }],
@@ -1856,12 +1884,13 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
   private async runRawAITranslation(
     sourceText: string,
-    onChunk?: (text: string) => void
+    onChunk?: (text: string) => void,
+    corpusGuidance = ""
   ): Promise<string> {
     return await this.runAIPrompt(
       buildTranslationPrompt(
         sourceText,
-        this.settings.customPrompt,
+        [this.settings.customPrompt, corpusGuidance].filter(Boolean).join("\n\n"),
         this.settings.targetLanguage,
         this.settings.sourceLanguage
       ),
@@ -1881,7 +1910,10 @@ export default class ContextualAIReaderPlugin extends Plugin {
   }: {
     contentType: SharedMemoryRequest["contentType"];
     document: SharedMemoryDocument;
-    execute: (items: SharedMemoryItem[]) => Promise<Record<string, string>>;
+    execute: (
+      items: SharedMemoryItem[],
+      corpusGuidance: string
+    ) => Promise<Record<string, string>>;
     forceRefresh?: boolean;
     items: SharedMemoryItem[];
     model?: string;
@@ -1905,7 +1937,10 @@ export default class ContextualAIReaderPlugin extends Plugin {
     const missing = items.filter((item) => !String(translations[item.id] || "").trim());
     if (!missing.length) return translations;
 
-    const generated = await execute(missing);
+    const corpusGuidance = formatSharedCorpusGuidance(
+      missing.flatMap((item) => lookup?.guidanceByItem?.[item.id] || [])
+    );
+    const generated = await execute(missing, corpusGuidance);
     missing.forEach((item) => {
       const value = String(generated[item.id] || "").trim();
       if (value) translations[item.id] = value;
@@ -2351,10 +2386,11 @@ export default class ContextualAIReaderPlugin extends Plugin {
     const translations = await this.translateItemsWithSharedMemory({
       contentType: "webpage",
       document: this.getSharedMemoryDocument("obsidian-markdown", sourceFile),
-      execute: async (missing) => {
+      execute: async (missing, corpusGuidance) => {
         const values = await this.translateRawBlockBatch(
           missing.map((item) => item.text),
-          onChunk
+          onChunk,
+          corpusGuidance
         );
         return Object.fromEntries(
           missing.map((item, index) => [item.id, values[index] || ""])
@@ -2368,11 +2404,17 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
   private async translateRawBlockBatch(
     blockTexts: string[],
-    onChunk?: (chunk: string) => void
+    onChunk?: (chunk: string) => void,
+    corpusGuidance = ""
   ): Promise<string[]> {
     if (this.isCancelled) throw new Error("Translation stopped.");
 
-    const prompt = buildBlockTranslationPrompt(blockTexts, this.settings.customPrompt, this.settings.targetLanguage, this.settings.sourceLanguage);
+    const prompt = buildBlockTranslationPrompt(
+      blockTexts,
+      [this.settings.customPrompt, corpusGuidance].filter(Boolean).join("\n\n"),
+      this.settings.targetLanguage,
+      this.settings.sourceLanguage
+    );
     const rawResult = await this.runAIPrompt(prompt, onChunk);
 
     if (this.isCancelled) throw new Error("Translation stopped.");
@@ -2384,12 +2426,24 @@ export default class ContextualAIReaderPlugin extends Plugin {
       console.warn("Block translation had the wrong delimiter count; retrying with smaller batches.", error);
 
       if (blockTexts.length === 1) {
-        return [(await this.runRawAITranslation(blockTexts[0])).trim()];
+        return [(await this.runRawAITranslation(
+          blockTexts[0],
+          undefined,
+          corpusGuidance
+        )).trim()];
       }
 
       const midpoint = Math.ceil(blockTexts.length / 2);
-      const left = await this.translateRawBlockBatch(blockTexts.slice(0, midpoint), onChunk);
-      const right = await this.translateRawBlockBatch(blockTexts.slice(midpoint), onChunk);
+      const left = await this.translateRawBlockBatch(
+        blockTexts.slice(0, midpoint),
+        onChunk,
+        corpusGuidance
+      );
+      const right = await this.translateRawBlockBatch(
+        blockTexts.slice(midpoint),
+        onChunk,
+        corpusGuidance
+      );
       return [...left, ...right];
     }
   }

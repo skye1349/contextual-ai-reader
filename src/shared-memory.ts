@@ -39,10 +39,19 @@ export interface SharedMemoryRequest {
 }
 
 export interface SharedMemoryLookup {
+  guidanceByItem: Record<string, SharedMemoryGuidance[]>;
   metadata: Record<string, SharedMemoryMetadata>;
   misses: string[];
   stats: SharedMemoryStats;
   translations: Record<string, string>;
+}
+
+export interface SharedMemoryGuidance {
+  id?: string;
+  memoryScoped?: false;
+  note?: string;
+  source: string;
+  target: string;
 }
 
 export interface SharedMemoryMetadata {
@@ -73,6 +82,7 @@ export interface SharedMemoryStatus {
 
 interface SharedMemoryResponse {
   error?: string;
+  guidanceByItem?: Record<string, SharedMemoryGuidance[]>;
   metadata?: Record<string, SharedMemoryMetadata>;
   misses?: string[];
   ok?: boolean;
@@ -126,6 +136,7 @@ export class SharedTranslationMemory {
     });
     if (!response) return null;
     return {
+      guidanceByItem: response.guidanceByItem ?? {},
       metadata: response.metadata ?? {},
       misses: response.misses ?? request.items.map((item) => item.id),
       stats: response.stats ?? {},

@@ -27,6 +27,9 @@ process.stdin.on("end", () => {
   }
   process.stdout.write(JSON.stringify({
     ok: true,
+    guidanceByItem: {
+      one: [{ memoryScoped: false, source: "Shared source", target: "共享来源" }]
+    },
     metadata: { one: { provenance: "exact-memory" } },
     misses: [],
     stats: { exactMemoryHits: 1 },
@@ -49,6 +52,7 @@ process.stdin.on("end", () => {
   };
   const lookup = await memory.lookup(request);
   assert.equal(lookup?.translations.one, "共享译文");
+  assert.equal(lookup?.guidanceByItem.one[0].target, "共享来源");
   assert.equal(lookup?.stats.exactMemoryHits, 1);
   assert.equal((await memory.status())?.databasePath, "/tmp/shared.sqlite3");
 });
