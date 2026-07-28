@@ -4,6 +4,16 @@ on:
   push:
     tags:
       - "[0-9]+.[0-9]+.[0-9]+"
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Version tag to build and publish
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   attestations: write
@@ -17,6 +27,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref_name }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -24,19 +36,51 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Validate release version
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          VERSION="$(node -p "require('./manifest.json').version")"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          HAS_VERSION_ENTRY="$(node -p "Boolean(require('./versions.json')[require('./manifest.json').version])")"
+
+          if [ "$VERSION" != "$RELEASE_TAG" ]; then
+            echo "Tag $RELEASE_TAG does not match manifest.json version $VERSION." >&2
+            exit 1
+          fi
+
+          if [ "$VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "manifest.json version ($VERSION) does not match package.json version ($PACKAGE_VERSION)." >&2
+            exit 1
+          fi
+
+          if [ "$HAS_VERSION_ENTRY" != "true" ]; then
+            echo "versions.json is missing $VERSION." >&2
+            exit 1
+          fi
+
       - name: Install dependencies
         run: npm ci
 
       - name: Build
         run: npm run build
 
-      - name: Create GitHub release
+      - name: Publish GitHub release assets
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" main.js manifest.json styles.css \
-            --title "${GITHUB_REF_NAME}" \
-            --notes "Release ${GITHUB_REF_NAME}"
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" main.js manifest.json styles.css \
+              --clobber
+            gh release edit "${RELEASE_TAG}" \
+              --title "${RELEASE_TAG}" \
+              --notes "Release ${RELEASE_TAG}"
+          else
+            gh release create "${RELEASE_TAG}" main.js manifest.json styles.css \
+              --title "${RELEASE_TAG}" \
+              --notes "Release ${RELEASE_TAG}"
+          fi
 
       - name: Attest release assets
         uses: actions/attest-build-provenance@v2

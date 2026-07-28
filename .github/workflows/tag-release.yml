@@ -12,8 +12,10 @@ permissions:
 
 jobs:
   tag-release:
-    name: Create version tag and release when needed
+    name: Create version tag when needed
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - name: Checkout
@@ -56,8 +58,17 @@ jobs:
           git fetch --tags origin
 
           if git rev-parse -q --verify "refs/tags/${{ steps.version.outputs.version }}" >/dev/null; then
+            TAG_SHA="$(git rev-list -n 1 "refs/tags/${{ steps.version.outputs.version }}")"
+            HEAD_SHA="$(git rev-parse HEAD)"
+
+            if [ "$TAG_SHA" != "$HEAD_SHA" ]; then
+              echo "Version ${{ steps.version.outputs.version }} already belongs to commit $TAG_SHA, but main is now $HEAD_SHA." >&2
+              echo "Bump manifest.json, package.json, and versions.json before merging another release." >&2
+              exit 1
+            fi
+
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Tag ${{ steps.version.outputs.version }} already exists."
+            echo "Tag ${{ steps.version.outputs.version }} already points to this commit."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
@@ -70,64 +81,13 @@ jobs:
           git tag -a "${{ steps.version.outputs.version }}" -m "Release ${{ steps.version.outputs.version }}"
           git push origin "refs/tags/${{ steps.version.outputs.version }}"
 
-      - name: Check whether release already exists
-        id: release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Release ${{ steps.version.outputs.version }} already exists."
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Checkout release tag
-        if: steps.release.outputs.exists == 'false'
-        run: |
-          git checkout --detach "${{ steps.version.outputs.version }}"
-
-          TAG_VERSION="$(node -p "require('./manifest.json').version")"
-          TAG_PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          TAG_HAS_VERSION_ENTRY="$(node -p "Boolean(require('./versions.json')[require('./manifest.json').version])")"
-
-          if [ "$TAG_VERSION" != "${{ steps.version.outputs.version }}" ]; then
-            echo "Release tag contains manifest version $TAG_VERSION, expected ${{ steps.version.outputs.version }}." >&2
-            exit 1
-          fi
-
-          if [ "$TAG_VERSION" != "$TAG_PACKAGE_VERSION" ]; then
-            echo "Release tag manifest version ($TAG_VERSION) does not match package.json version ($TAG_PACKAGE_VERSION)." >&2
-            exit 1
-          fi
-
-          if [ "$TAG_HAS_VERSION_ENTRY" != "true" ]; then
-            echo "Release tag versions.json is missing $TAG_VERSION." >&2
-            exit 1
-          fi
-
-      - name: Install dependencies
-        if: steps.release.outputs.exists == 'false'
-        run: npm ci
-
-      - name: Build release assets
-        if: steps.release.outputs.exists == 'false'
-        run: npm run build
-
-      - name: Create GitHub release
-        if: steps.release.outputs.exists == 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "${{ steps.version.outputs.version }}" main.js manifest.json styles.css \
-            --title "${{ steps.version.outputs.version }}" \
-            --notes "Release ${{ steps.version.outputs.version }}"
-
-      - name: Attest release assets
-        if: steps.release.outputs.exists == 'false'
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: |
-            main.js
-            manifest.json
-            styles.css
+  release:
+    name: Publish version release
+    needs: tag-release
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    uses: ./.github/workflows/release.yml
+    with:
+      release_tag: ${{ needs.tag-release.outputs.version }}
