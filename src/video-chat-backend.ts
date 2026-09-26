@@ -53,10 +53,10 @@ export function buildChatApiBody(config: VideoChatBackendConfig, prompt: string,
     model: config.model, max_tokens: 8192,
     messages: [{ role: "user", content: buildAnthropicChatContent(prompt, frames) }]
   };
-  return { model: config.model, messages: [{ role: "user", content: [
+  return { model: config.model, messages: [{ role: "user", content: frames.length ? [
     { type: "text", text: prompt },
     ...frames.map((frame) => ({ type: "image_url", image_url: { url: `data:image/png;base64,${Buffer.from(frame.png).toString("base64")}`, detail: "auto" } }))
-  ] }] };
+  ] : prompt }] };
 }
 
 export function parseChatApiAnswer(backend: string, value: unknown): string {
@@ -72,7 +72,7 @@ export function parseChatApiAnswer(backend: string, value: unknown): string {
 function abortableHttp(request: Promise<{ status: number; json: unknown }>, signal: AbortSignal, timeoutMs: number): Promise<{ status: number; json: unknown }> {
   return new Promise((resolve, reject) => {
     const abort = () => { cleanup(); reject(new Error("Video chat stopped.")); };
-    const timer = setTimeout(() => { cleanup(); reject(new Error("Video chat timed out.")); }, timeoutMs);
+    const timer = setTimeout(() => { cleanup(); reject(new Error("AI request timed out. Check your provider and timeout setting.")); }, timeoutMs);
     const cleanup = () => { clearTimeout(timer); signal.removeEventListener("abort", abort); };
     signal.addEventListener("abort", abort, { once: true });
     request.then((value) => { cleanup(); resolve(value); }, (error: unknown) => { cleanup(); reject(error instanceof Error ? error : new Error(String(error))); });
@@ -107,19 +107,21 @@ export async function runVideoChatAI(config: VideoChatBackendConfig, prompt: str
       return data.result.trim();
     } finally { await rm(directory, { force: true, recursive: true }); }
   }
+  if (!config.model.trim()) throw new Error("Set a model ID supported by your API provider.");
   if (!config.apiKey?.trim()) throw new Error(`${config.backend === "openai" ? "OpenAI" : "Anthropic"} API key is not configured.`);
   const anthropic = config.backend === "anthropic";
-  const base = (config.baseUrl || (anthropic ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1")).replace(/\/+$/, "");
+  const base = (config.baseUrl?.trim() || (anthropic ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1")).replace(/\/+$/, "");
   const response = await abortableHttp(http({
     url: `${base}/${anthropic ? "messages" : "chat/completions"}`, method: "POST", throw: false,
-    headers: anthropic ? { "Content-Type": "application/json", "x-api-key": config.apiKey, "anthropic-version": "2023-06-01" }
-      : { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
+    headers: anthropic ? { "Content-Type": "application/json", "x-api-key": config.apiKey.trim(), "anthropic-version": "2023-06-01" }
+      : { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey.trim()}` },
     body: JSON.stringify(buildChatApiBody(config, prompt, frames))
   }), signal, config.timeoutMs);
   checkChatAbort(signal);
   if (response.status < 200 || response.status >= 300) {
     const error = response.json as { error?: { message?: string } };
-    throw new Error(error?.error?.message || `Video chat API returned HTTP ${response.status}.`);
+    const message = error?.error?.message || `AI API returned HTTP ${response.status}.`;
+    throw new Error(frames.length ? `${message} This request includes images; choose a vision-capable model or use subtitles only.` : message);
   }
   return parseChatApiAnswer(config.backend, response.json);
 }

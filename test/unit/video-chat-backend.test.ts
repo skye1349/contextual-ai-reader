@@ -59,3 +59,26 @@ test("Claude receives structured multimodal stdin and reads the final result eve
     assert.equal(await runVideoChatAI({ ...config, backend: 'claude', command }, 'question', [frame], new AbortController().signal, async () => { throw new Error('No HTTP'); }), 'Image received');
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test("text API requests stay compatible with providers that only accept string content", () => {
+  const body = buildChatApiBody(config, "Translate this.", []) as any;
+  assert.equal(body.messages[0].content, "Translate this.");
+  assert.equal(body.temperature, undefined);
+});
+
+test("API configuration trims URL and key, and errors explain image capability requirements", async () => {
+  let seen: any;
+  const request = async (input: any) => { seen = input; return { status: 401, json: { error: { message: "Invalid test credential" } } }; };
+  await assert.rejects(runVideoChatAI({ ...config, baseUrl: " https://example.test/v1/// ", apiKey: " token " }, "question", [frame], new AbortController().signal, request), /vision-capable/);
+  assert.equal(seen.url, "https://example.test/v1/chat/completions");
+  assert.equal(seen.headers.Authorization, "Bearer token");
+  await assert.rejects(runVideoChatAI({ ...config, model: " " }, "q", [], new AbortController().signal, request), /model ID/);
+  await assert.rejects(runVideoChatAI({ ...config, apiKey: " " }, "q", [], new AbortController().signal, request), /key is not configured/);
+});
+
+test("both API protocols reject empty replies and surface provider errors", () => {
+  for (const backend of ["openai", "anthropic"]) {
+    assert.throws(() => parseChatApiAnswer(backend, {}), /empty answer/);
+    assert.throws(() => parseChatApiAnswer(backend, { error: { message: "Rate limit reached" } }), /Rate limit/);
+  }
+});

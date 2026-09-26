@@ -1,8 +1,16 @@
-# Contextual AI Reader en Español
+# Read & Watch with AI en Español
 
 [English](https://github.com/skye1349/contextual-ai-reader/blob/main/README.md) · [中文](https://github.com/skye1349/contextual-ai-reader/blob/main/README.zh-CN.md) · [日本語](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ja.md) · [한국어](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ko.md) · [Français](https://github.com/skye1349/contextual-ai-reader/blob/main/README.fr.md) · [Deutsch](https://github.com/skye1349/contextual-ai-reader/blob/main/README.de.md)
 
-Contextual AI Reader es un complemento de escritorio para Obsidian pensado para lectura asistida: traducción, explicación de vocabulario en contexto, lectura en voz alta, notas de extractos, PDF seleccionables y traducción de archivos Markdown.
+## 1.2.0: nuevo nombre y configuración API
+
+**Contextual AI Reader** pasa a llamarse **Read & Watch with AI**. El ID interno y la URL del repositorio no cambian: se conservan ajustes, cachés e historiales. Las rutas guardadas se mantienen; las instalaciones nuevas usan el nuevo nombre.
+
+Selecciona **OpenAI-compatible API** o **Anthropic API token** en **AI backend** e introduce la clave, URL base y modelo correspondientes. OpenAI: `https://api.openai.com/v1`; Claude: `https://api.anthropic.com/v1`. No necesitas Codex, Claude Code, Node.js ni una suscripción CLI. Incluye traducción de selecciones/texto PDF, vocabulario, notas completas y lotes, subtítulos, resúmenes de vídeos, seguimiento del chat y preguntas sobre imágenes. Las imágenes requieren un modelo con visión. **Test text / Test image** envían pruebas pequeñas con una imagen sintética; pueden generar cargos.
+
+**Auto** prioriza la clave compatible con OpenAI, luego Anthropic y después las CLI locales. Selecciona **Codex** explícitamente si prefieres la sesión local. La transcripción de audio sin subtítulos se configura aparte mediante **Transcription API key / base URL / model** o Groq. El servicio debe admitir `/audio/transcriptions`, `verbose_json` y segmentos con tiempos. Solo se reutiliza la clave de chat si ambas URL base coinciden. Una clave Claude no sirve para OpenAI Whisper. Las claves, protocolos y capacidades de modelos no son intercambiables. Extraer CC, capturar imágenes y leer con la voz del sistema no requiere una clave IA.
+
+Read & Watch with AI es un complemento de escritorio para Obsidian pensado para lectura asistida: traducción, explicación de vocabulario en contexto, lectura en voz alta, notas de extractos, PDF seleccionables y traducción de archivos Markdown.
 
 ## Requisitos del sistema e instalación
 
@@ -45,7 +53,7 @@ La caché conserva los 30 vídeos más recientes. Las capturas y notas de transc
 
 Elige `AI backend` en la configuración.
 
-- `Auto`: usa Codex local primero y Claude Code como alternativa.
+- `Auto`: prioriza las claves OpenAI/Anthropic y después las CLI locales.
 - `Codex`: usa el CLI local de Codex y tu sesión local.
 - `Claude Code`: usa el CLI local de Claude Code y tu sesión local.
 - `OpenAI API token`: usa tu API key de OpenAI.

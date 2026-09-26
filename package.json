@@ -1,7 +1,7 @@
 {
   "name": "contextual-ai-reader",
-  "version": "1.1.0",
-  "description": "Multilingual AI reading companion for translation, contextual vocabulary, PDFs, and Markdown notes.",
+  "version": "1.2.0",
+  "description": "Translate documents, learn from videos with bilingual subtitles, and turn screenshots and AI conversations into notes.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",

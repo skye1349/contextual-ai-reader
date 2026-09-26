@@ -1,12 +1,20 @@
-# Contextual AI Reader 中文文档
+# Read & Watch with AI 中文文档
 
 [English](https://github.com/skye1349/contextual-ai-reader/blob/main/README.md) · [日本語](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ja.md) · [한국어](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ko.md) · [Español](https://github.com/skye1349/contextual-ai-reader/blob/main/README.es.md) · [Français](https://github.com/skye1349/contextual-ai-reader/blob/main/README.fr.md) · [Deutsch](https://github.com/skye1349/contextual-ai-reader/blob/main/README.de.md)
+
+## 1.2.0：新名称与 API 配置
+
+插件由 **Contextual AI Reader** 更名为 **Read & Watch with AI**。内部 ID 和仓库地址保持不变，已有安装、设置、字幕缓存和聊天记录继续可用。已有输出路径保留，新安装使用新名称。
+
+选择 **AI backend → OpenAI-compatible API** 或 **Anthropic API token**，填写对应服务的 key、base URL 和模型 ID。OpenAI 地址为 `https://api.openai.com/v1`，Claude 为 `https://api.anthropic.com/v1`。API 模式不需要 Codex、Claude Code、Node.js 或 CLI 会员，可用于选区/PDF 文本翻译、词汇解释、整篇与批量翻译、字幕翻译、视频总结、连续问答和图片提问。图片需要支持视觉的模型。**Test text** 和 **Test image** 可测试文字与图片请求；使用合成图片，不读取笔记，服务商可能计费。
+
+**Auto** 现在优先使用已配置的 OpenAI 兼容 key，再尝试 Anthropic key，最后尝试本地 CLI；保存 key 后仍想用本机账号时，明确选择 **Codex**。无字幕音频转录单独配置 **Transcription API key / base URL / model**，或使用 Groq；服务必须支持 `/audio/transcriptions`、`verbose_json` 和带时间戳的分段结果。只有聊天与转录地址一致时才复用聊天 key。Claude 聊天 key 不能调用 OpenAI Whisper。API key 不能跨服务通用，接口协议与模型能力也必须匹配。已有 CC 提取、截图和系统朗读不需要 AI key。
 
 ## 1.1.0 新功能
 
 支持打开本地视频、识别 CC 字幕、导出带时间戳的字幕页面，并通过 **AI help** 总结视频、解释画面和连续追问。详见下方「本地视频与互动字幕」和「和 AI 讨论视频」。
 
-Contextual AI Reader 是一个 Obsidian 桌面端阅读辅助插件，支持 macOS、Windows 和 Linux。它可以在你阅读 Markdown、可选中文本的 PDF、外语书籍、长篇文章或 YouTube 字幕时，提供翻译、上下文生词解释、朗读、摘抄、生词本和整篇/批量翻译。
+Read & Watch with AI 是一个 Obsidian 桌面端阅读辅助插件，支持 macOS、Windows 和 Linux。它可以在你阅读 Markdown、可选中文本的 PDF、外语书籍、长篇文章或 YouTube 字幕时，提供翻译、上下文生词解释、朗读、摘抄、生词本和整篇/批量翻译。
 
 ## 系统要求与安装
 
@@ -48,7 +56,7 @@ Markdown/PDF 选区、快速翻译、系统朗读、摘抄以及 API 后端本�
 - 本地账号模式：通过本机的 Codex 或 Claude Code CLI，使用你已经登录的 ChatGPT/Codex 或 Claude 账号。
 - API Token 模式：在插件设置中填写 OpenAI 或 Anthropic API key 后直接调用 API。
 
-默认模式是 `Auto`：优先使用本地 Codex，找不到 Codex 时再尝试 Claude Code。
+默认模式是 `Auto`：优先使用已配置的 OpenAI 兼容 key，再尝试 Anthropic key，最后尝试本地 CLI。
 
 ## 功能概览
 
@@ -76,7 +84,7 @@ Markdown/PDF 选区、快速翻译、系统朗读、摘抄以及 API 后端本�
 
 可选模式：
 
-- `Auto`：默认模式。优先使用本地 Codex，找不到时使用本地 Claude Code。
+- `Auto`：默认模式。优先使用已配置的 API key，其次使用本地 CLI。
 - `Codex`：使用本机 Codex 可执行文件和本地登录状态。
 - `Claude Code`：使用本机 Claude Code 可执行文件和本地登录状态。
 - `OpenAI API token`：使用你填写的 OpenAI API key。

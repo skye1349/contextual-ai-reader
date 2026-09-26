@@ -4,7 +4,7 @@ import { Key } from "webdriverio";
 
 const PLUGIN_ID = "contextual-ai-reader";
 
-describe("Contextual AI Reader in Obsidian", function () {
+describe("Read & Watch with AI in Obsidian", function () {
   it("loads the plugin, registers commands, and opens settings", async function () {
     const pluginState = await browser.executeObsidian(({ app }) => {
       const plugin = app.plugins.plugins["contextual-ai-reader"];
@@ -22,7 +22,7 @@ describe("Contextual AI Reader in Obsidian", function () {
     });
 
     expect(pluginState.loaded).toBe(true);
-    expect(pluginState.manifestName).toBe("Contextual AI Reader");
+    expect(pluginState.manifestName).toBe("Read & Watch with AI");
     expect(pluginState.commandCount).toBeGreaterThanOrEqual(8);
     expect(pluginState.commands).toContain(`${PLUGIN_ID}:translate-selection-to-chinese`);
     expect(pluginState.commands).toContain(`${PLUGIN_ID}:translate-current-file-interleaved-to-chinese`);
@@ -66,11 +66,11 @@ describe("Contextual AI Reader in Obsidian", function () {
   it("reuses an already-open excerpt note instead of opening duplicate leaves", async function () {
     const result = await browser.executeObsidian(async ({ app }) => {
       const plugin = app.plugins.plugins["contextual-ai-reader"];
-      const path = "Contextual AI Reader Excerpts.md";
+      const path = "Read & Watch with AI Excerpts.md";
       let file = app.vault.getAbstractFileByPath(path);
 
       if (!file) {
-        file = await app.vault.create(path, "# Contextual AI Reader Excerpts\n\n");
+        file = await app.vault.create(path, "# Read & Watch with AI Excerpts\n\n");
       }
 
       await plugin.openExcerptFile(file);

@@ -44,8 +44,8 @@ Add this object to the end of `community-plugins.json` in `obsidianmd/obsidian-r
 ```json
 {
   "id": "contextual-ai-reader",
-  "name": "Contextual AI Reader",
-  "description": "AI reading companion for translation, contextual vocabulary, PDFs, and Markdown notes.",
+  "name": "Read & Watch with AI",
+  "description": "Translate documents, learn from videos with bilingual subtitles, and turn screenshots and AI conversations into notes.",
   "author": "Taoye",
   "repo": "skye1349/contextual-ai-reader"
 }
