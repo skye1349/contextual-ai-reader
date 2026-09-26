@@ -25,12 +25,35 @@ test("keeps shared memory private unless the build flag is explicitly true", asy
   );
   assert.match(
     source,
+    /reuseExactMemory: contentType === "video-subtitles"/
+  );
+  assert.match(source, /migrateYouTubeCacheToSharedMemory/);
+  assert.match(source, /provenance: "obsidian-youtube-cache-migration"/);
+  assert.match(
+    source,
     /if \(PRIVATE_SHARED_MEMORY_BUILD\) \{\s+this\.addCommand\(\{\s+id: "check-shared-translation-memory"/
   );
   assert.match(
     source,
     /if \(PRIVATE_SHARED_MEMORY_BUILD\) \{\s+new Setting\(containerEl\)\s+\.setName\("Private shared translation memory"\)/
   );
+});
+
+test("provides a private installer that preserves settings and enables shared memory", async () => {
+  const [packageSource, installer] = await Promise.all([
+    readFile(path.join(projectRoot, "package.json"), "utf8"),
+    readFile(path.join(projectRoot, "scripts/install-private-plugin.mjs"), "utf8")
+  ]);
+  const packageJson = JSON.parse(packageSource) as { scripts?: Record<string, string> };
+
+  assert.equal(
+    packageJson.scripts?.["build:private"],
+    "CCLT_PRIVATE_SHARED_MEMORY=true npm run build"
+  );
+  assert.match(packageJson.scripts?.["install:private-plugin"] ?? "", /build:private/);
+  assert.match(installer, /data\.json\.backup-before-shared-memory/);
+  assert.match(installer, /settings\.sharedMemoryEnabled = true/);
+  assert.match(installer, /copyFile\(resolve\(root, "main\.js"\)/);
 });
 
 test("routes every translation surface through the shared-memory wrapper", async () => {

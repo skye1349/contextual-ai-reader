@@ -2,7 +2,11 @@
 
 [中文](https://github.com/skye1349/contextual-ai-reader/blob/main/README.zh-CN.md) · [日本語](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ja.md) · [한국어](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ko.md) · [Español](https://github.com/skye1349/contextual-ai-reader/blob/main/README.es.md) · [Français](https://github.com/skye1349/contextual-ai-reader/blob/main/README.fr.md) · [Deutsch](https://github.com/skye1349/contextual-ai-reader/blob/main/README.de.md)
 
-Contextual AI Reader is an Obsidian desktop reading companion for translation, contextual vocabulary, text-to-speech, excerpts, PDFs, Markdown, and language learning with YouTube transcripts.
+## New in 1.1.0
+
+Open local videos with detected CC tracks, export timestamped transcript notes, and use **AI help** to summarize, explain frames, and ask follow-up questions. See [local video setup](#local-video-learning-player) and [video chat](#ask-ai-about-a-video).
+
+Contextual AI Reader is an Obsidian desktop reading companion for translation, contextual vocabulary, text-to-speech, excerpts, PDFs, Markdown, and language learning with local videos and YouTube transcripts.
 
 It supports configurable language direction: choose the language you are reading, or let the plugin auto-detect it, then choose the language you want to learn with. The default is auto-detect source language and Simplified Chinese as the target language.
 
@@ -321,3 +325,26 @@ Full-file and batch translation commands modify Markdown files directly. Back up
 ## License
 
 MIT
+
+## Local video learning player
+
+Run **Open local video** from the command palette and browse for a video or paste its absolute path. Files may live outside the vault. The player shares YouTube's playback, windowed fullscreen, interactive bilingual transcript, AI translation/cache, subtitle visibility, screenshots, and transcript-note export. Exported timestamps reopen the local file at the matching time; keep the original video at its saved path.
+
+Embedded text subtitle tracks require ffmpeg and ffprobe (the latter alongside the configured ffmpeg executable). Matching sidecars such as `lesson.srt`, `lesson.en.srt`, and `lesson.zh.vtt` are detected automatically; SRT/VTT require no video tools, while ASS/SSA use ffmpeg. Use **Subtitle track** to choose among available tracks. **Create transcript note** exports original captions and available translations to one Markdown page.
+
+With no readable captions, the microphone action can transcribe audio using the configured Groq/OpenAI Whisper service. This uploads extracted audio; simply opening a local file does not transcribe or upload it. Image-based and burned-in subtitles are not extractable text captions. Playback depends on the embedded browser's codec support; use H.264/AAC MP4 or WebM, or convert unsupported media first. Local videos use the existing video screenshot, transcript-folder, subtitle-appearance, and AI settings.
+
+To exercise real local playback and embedded-caption extraction in the sandboxed Obsidian E2E suite, install ffmpeg/ffprobe and run `LOCAL_VIDEO_E2E=true npm run test:e2e -- --spec test/specs/local-video.e2e.ts`. Set `LOCAL_VIDEO_FFMPEG` if ffmpeg is not at its default path.
+
+
+## Ask AI about a video
+
+Open a local video or YouTube video, then click **AI help** at the upper right of the transcript pane. Choose **Summarize video**, **Explain this moment**, or type a question and continue the conversation. Answer timestamps jump back to the video; **Save chat to note** exports a Markdown page alongside transcript notes.
+
+The chat uses loaded captions, the playback position, recent conversation, and the selected visual evidence: current frame (default), six frames sampled across the video, or subtitles only. It sends actual images to a vision-capable model. These are snapshots, not continuous video or audio understanding. Missing captions can be transcribed first with the player's microphone action; image extraction failures and partial transcript coverage are shown explicitly. Long transcript summaries process every caption chunk before combining the results.
+
+Chat uses the configured AI backend. **Video chat Codex model** can override the Codex model for chat without changing translation settings; leave it empty to inherit. Codex/Claude use the local CLI login, while OpenAI/Anthropic use the configured API credentials. Sending a question sends its caption/image context to that backend. Opening the panel alone does not call AI. **Stop** cancels the chat CLI process without interrupting translations; API requests stop updating the UI, although an already submitted network request may finish remotely.
+
+History is saved locally per video (the latest 100 videos, up to 200 messages each); each request includes up to 30 recent messages within the context budget. Images are temporary and are not stored in chat history. Clearing chat removes that video's saved conversation; exported notes remain independent.
+
+Choose a model available to your account; image questions require vision support. Prior images are not reattached. The recent-history budget is 24,000 text characters; older conversation is omitted rather than automatically summarized. Local embedded captions and timeline frame sampling require ffmpeg/ffprobe; local SRT/VTT sidecars do not require yt-dlp.

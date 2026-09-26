@@ -70,7 +70,7 @@
 }
 
 .contextual-ai-reader-vocab-word {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
   color: var(--text-normal);
 }
@@ -259,8 +259,9 @@
 }
 
 .youtube-reader-shell {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1.65fr) minmax(320px, 0.75fr);
+  grid-template-columns: minmax(0, var(--youtube-reader-main-width, 68.75%)) 8px minmax(0, 1fr);
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -268,19 +269,60 @@
 }
 
 .youtube-reader-main {
+  position: relative;
   display: flex;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  border-right: 1px solid var(--background-modifier-border);
+}
+
+.youtube-reader-resizer {
+  position: relative;
+  z-index: 3;
+  width: 8px;
+  min-width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  background: var(--background-primary);
+}
+
+.youtube-reader-resizer::after {
+  position: absolute;
+  inset: 0 3px;
+  background: var(--background-modifier-border);
+  content: "";
+  transition: background-color 120ms ease, inset 120ms ease;
+}
+
+.youtube-reader-resizer:hover::after,
+.youtube-reader-resizer:focus-visible::after,
+.youtube-reader-shell.is-resizing .youtube-reader-resizer::after {
+  inset: 0 2px;
+  background: var(--interactive-accent);
+}
+
+.youtube-reader-shell.is-resizing,
+.youtube-reader-shell.is-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+.youtube-reader-shell.is-resizing::after {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  content: "";
 }
 
 .youtube-reader-toolbar {
   display: flex;
   align-items: center;
-  flex: 0 0 44px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  min-height: 44px;
   gap: 4px;
-  padding: 0 10px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--background-modifier-border);
   background: var(--background-secondary);
 }
@@ -307,15 +349,113 @@
   min-width: 0;
   min-height: 240px;
   flex: 1 1 auto;
+  overflow: hidden;
   background: #000;
 }
 
-.youtube-reader-player iframe {
+.youtube-reader-player video,
+.youtube-reader-player iframe,
+.youtube-reader-player webview {
   position: absolute;
+  z-index: 1;
   inset: 0;
   width: 100%;
   height: 100%;
   border: 0;
+}
+
+.youtube-reader-player.is-windowed-fullscreen {
+  position: absolute !important;
+  z-index: 4;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  background: #000;
+}
+
+.youtube-reader-video-subtitles {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: 0 6% 9%;
+  pointer-events: none;
+  background: transparent;
+  opacity: 0;
+  text-align: center;
+}
+
+.youtube-reader-video-subtitles.has-caption {
+  opacity: 1;
+}
+
+.youtube-reader-video-subtitles.is-position-pending,
+.youtube-reader-video-subtitles.is-video-offscreen,
+.youtube-reader-video-subtitles-hidden .youtube-reader-video-subtitles {
+  display: none;
+}
+
+.youtube-reader-video-subtitle-original,
+.youtube-reader-video-subtitle-translation {
+  max-width: min(92%, 1200px);
+  border: 0;
+  background: transparent;
+  color: var(--youtube-reader-original-subtitle-color, #111);
+  font-family: var(--font-interface);
+  font-size: var(--youtube-reader-original-subtitle-size, 16px);
+  font-weight: 750;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-shadow:
+    -1px -1px 0 rgba(255, 255, 255, 0.96),
+    1px -1px 0 rgba(255, 255, 255, 0.96),
+    -1px 1px 0 rgba(255, 255, 255, 0.96),
+    1px 1px 0 rgba(255, 255, 255, 0.96),
+    0 2px 6px rgba(255, 255, 255, 0.72);
+}
+
+.youtube-reader-video-subtitle-translation {
+  display: none;
+  margin-top: 6px;
+  color: var(--youtube-reader-translation-subtitle-color, #111);
+  font-size: var(--youtube-reader-translation-subtitle-size, 15px);
+  font-weight: 700;
+}
+
+.youtube-reader-video-subtitles.has-translation .youtube-reader-video-subtitle-translation {
+  display: block;
+}
+
+.youtube-reader-windowed-fullscreen-capture,
+.youtube-reader-windowed-fullscreen-exit {
+  position: absolute;
+  z-index: 5;
+  top: 18px;
+  right: 18px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 8px;
+  background: rgba(18, 18, 18, 0.62);
+  color: #fff;
+  backdrop-filter: blur(8px);
+}
+
+.youtube-reader-windowed-fullscreen-capture {
+  right: 66px;
+}
+
+.youtube-reader-player.is-windowed-fullscreen .youtube-reader-windowed-fullscreen-capture,
+.youtube-reader-player.is-windowed-fullscreen .youtube-reader-windowed-fullscreen-exit {
+  display: flex;
 }
 
 .youtube-reader-status {
@@ -405,14 +545,15 @@
 
 .youtube-reader-segment-content {
   min-width: 0;
-  cursor: pointer;
 }
 
 .youtube-reader-original,
 .youtube-reader-translation {
+  cursor: text;
   overflow-wrap: anywhere;
   letter-spacing: 0;
   line-height: 1.55;
+  user-select: text;
 }
 
 .youtube-reader-original {
@@ -463,6 +604,10 @@
     grid-template-columns: 1fr;
   }
 
+  .youtube-reader-resizer {
+    display: none;
+  }
+
   .youtube-reader-main {
     border-right: 0;
     border-bottom: 1px solid var(--background-modifier-border);
@@ -502,3 +647,40 @@
 .contextual-ai-reader-refine-btn:hover {
   opacity: 0.85;
 }
+
+.youtube-reader-player video { object-fit: contain; background: #000; }
+.youtube-reader-toolbar select { max-width: 220px; }
+
+.youtube-reader-local-player .youtube-reader-video-subtitles { padding-bottom: max(68px, 9%); }
+
+/* Video-aware AI conversation, shared by local media and YouTube. */
+.video-chat-panel { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; flex-direction: column; overflow: hidden; }
+.video-chat-panel.is-hidden, .video-chat-transcript-hidden { display: none !important; }
+.youtube-reader-transcript-header { flex-wrap: wrap; flex: 0 0 auto; min-height: 44px; padding: 6px 10px; gap: 6px; }
+.video-chat-open { margin-left: auto; }
+.video-chat-tab { box-shadow: none; background: transparent; padding: 4px; }
+.video-chat-info { padding: 12px 14px 4px; font-size: 12px; color: var(--text-muted); }
+.video-chat-info strong { display: block; color: var(--text-normal); font-size: 15px; margin-bottom: 4px; }
+.video-chat-info p { margin: 6px 0; line-height: 1.4; }
+.video-chat-quick-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 12px 10px; }
+.video-chat-quick-actions button, .video-chat-actions button { font-size: 12px; }
+.video-chat-messages { flex: 1 1 auto; min-height: 80px; overflow: auto; padding: 8px 12px; overscroll-behavior: contain; }
+.video-chat-empty { padding: 24px 8px; text-align: center; color: var(--text-muted); font-size: 13px; }
+.video-chat-message { padding: 12px; margin-bottom: 12px; border-radius: 10px; border: 1px solid var(--background-modifier-border); background: var(--background-primary); overflow-wrap: anywhere; }
+.video-chat-message.is-user { background: var(--background-secondary); }
+.video-chat-message-label { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--text-muted); gap: 8px; margin-bottom: 8px; }
+.video-chat-message-label button { font-size: 11px; height: 23px; padding: 2px 6px; }
+.video-chat-message-body { font-size: 14px; line-height: 1.6; user-select: text; }
+.video-chat-message-body.is-plain-text { white-space: pre-wrap; }
+.video-chat-message-body > :first-child { margin-top: 0; }
+.video-chat-message-body > :last-child { margin-bottom: 0; }
+.video-chat-message-body pre { overflow-x: auto; }
+.video-chat-message-context { font-size: 11px; color: var(--text-muted); margin-top: 10px; }
+.video-chat-status { padding: 6px 14px; color: var(--text-muted); font-size: 12px; max-height: 80px; overflow: auto; overflow-wrap: anywhere; }
+.video-chat-panel.is-busy .video-chat-status { color: var(--text-accent); }
+.video-chat-composer { padding: 10px 12px; border-top: 1px solid var(--background-modifier-border); background: var(--background-primary); }
+.video-chat-options { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
+.video-chat-options select { max-width: 100%; min-width: 0; flex: 1; font-size: 12px; }
+.video-chat-composer textarea { width: 100%; min-height: 72px; max-height: 180px; resize: vertical; font-size: 14px; }
+.video-chat-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.video-chat-hint { font-size: 10px; color: var(--text-faint); margin-top: 8px; }
