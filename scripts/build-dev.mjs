@@ -13,7 +13,7 @@ await Promise.all([
   writeFile(resolve(outputDir, "manifest.json"), `${JSON.stringify({
     ...manifest,
     id: "contextual-ai-reader-dev",
-    name: "Contextual AI Reader Dev",
+    name: "Read & Watch with AI Dev",
     description: `${manifest.description} Local development build.`
   }, null, 2)}\n`)
 ]);

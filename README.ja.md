@@ -1,8 +1,16 @@
-# Contextual AI Reader 日本語
+# Read & Watch with AI 日本語
 
 [English](https://github.com/skye1349/contextual-ai-reader/blob/main/README.md) · [中文](https://github.com/skye1349/contextual-ai-reader/blob/main/README.zh-CN.md) · [한국어](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ko.md) · [Español](https://github.com/skye1349/contextual-ai-reader/blob/main/README.es.md) · [Français](https://github.com/skye1349/contextual-ai-reader/blob/main/README.fr.md) · [Deutsch](https://github.com/skye1349/contextual-ai-reader/blob/main/README.de.md)
 
-Contextual AI Reader は、Obsidian デスクトップ用の読書補助プラグインです。選択テキストの翻訳、文脈に基づく語彙説明、読み上げ、抜粋ノート、PDF の選択テキスト翻訳、Markdown ファイル全体の翻訳に対応します。
+## 1.2.0：名称変更と API 設定
+
+**Contextual AI Reader** は **Read & Watch with AI** に名称変更しました。内部 ID とリポジトリ URL は維持し、設定・字幕キャッシュ・会話履歴は引き続き利用できます。保存済みの出力先は変えず、新規インストールでは新名称を使います。
+
+**AI backend** で **OpenAI-compatible API** または **Anthropic API token** を選び、対応するキー、ベース URL、モデル ID を入力します。OpenAI は `https://api.openai.com/v1`、Claude は `https://api.anthropic.com/v1` です。Codex・Claude Code・Node.js・CLI の契約は不要です。選択範囲/PDF テキスト、語彙説明、ノート全体・一括翻訳、字幕翻訳、動画要約、追加質問、画像質問に使えます。画像には画像対応モデルが必要です。**Test text / Test image** は小さな接続テストを送信し、画像には合成画像を使います。料金が発生する場合があります。
+
+**Auto** は OpenAI 互換キー、Anthropic キー、ローカル CLI の順で選びます。キーを保存していてもローカルログインを使う場合は **Codex** を明示的に選びます。字幕のない音声は **Transcription API key / base URL / model** または Groq を別途設定してください。サービスは `/audio/transcriptions`、`verbose_json`、時刻付き区間をサポートする必要があります。同じベース URL の場合だけチャットキーを再利用します。Claude キーでは OpenAI Whisper を呼び出せません。任意のキーやモデルがすべての機能に対応するわけではありません。CC 抽出、スクリーンショット、システム読み上げには AI キーは不要です。
+
+Read & Watch with AI は、Obsidian デスクトップ用の読書補助プラグインです。選択テキストの翻訳、文脈に基づく語彙説明、読み上げ、抜粋ノート、PDF の選択テキスト翻訳、Markdown ファイル全体の翻訳に対応します。
 
 ## システム要件とインストール
 
@@ -45,7 +53,7 @@ YouTube キャッシュは最近の 30 本を保持します。画像と生成�
 
 設定画面の `AI backend` で選択します。
 
-- `Auto`: ローカル Codex を優先し、見つからなければ Claude Code を使います。
+- `Auto`: OpenAI 互換キー、Anthropic キー、ローカル CLI の順で選びます。
 - `Codex`: ローカル Codex CLI とログイン済みアカウントを使います。
 - `Claude Code`: ローカル Claude Code CLI とログイン済みアカウントを使います。
 - `OpenAI API token`: OpenAI API key を使います。

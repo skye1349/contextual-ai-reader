@@ -152,6 +152,9 @@ interface ContextualAIReaderSettings {
   youtubeCaptureInsertIntoActiveNote: boolean;
   youtubeFfmpegCommand: string;
   youtubeGroqApiKey: string;
+  transcriptionApiKey: string;
+  transcriptionBaseUrl: string;
+  transcriptionModel: string;
   youtubeOriginalSubtitleColor: string;
   youtubeOriginalSubtitleFontSize: number;
   youtubeScreenshotFolder: string;
@@ -174,7 +177,7 @@ const DEFAULT_SETTINGS: ContextualAIReaderSettings = {
   codexCommand: "",
   customPrompt: "",
   debounceMs: 450,
-  excerptFilePath: "Contextual AI Reader Excerpts.md",
+  excerptFilePath: "Read & Watch with AI Excerpts.md",
   includeTranslationInExcerpt: true,
   minSelectionChars: 2,
   model: "gpt-5.4-mini",
@@ -201,14 +204,17 @@ const DEFAULT_SETTINGS: ContextualAIReaderSettings = {
   youtubeCaptureInsertIntoActiveNote: true,
   youtubeFfmpegCommand: "",
   youtubeGroqApiKey: "",
+  transcriptionApiKey: "",
+  transcriptionBaseUrl: "https://api.openai.com/v1",
+  transcriptionModel: "whisper-1",
   youtubeOriginalSubtitleColor: "#111111",
   youtubeOriginalSubtitleFontSize: 16,
-  youtubeScreenshotFolder: "Contextual AI Reader/YouTube Screenshots",
+  youtubeScreenshotFolder: "Read & Watch with AI/YouTube Screenshots",
   youtubeScreenshotWidth: 720,
   youtubeTranscriptionBackend: "auto",
   youtubeTranslationSubtitleColor: "#111111",
   youtubeTranslationSubtitleFontSize: 15,
-  youtubeTranscriptFolder: "Contextual AI Reader/YouTube Transcripts",
+  youtubeTranscriptFolder: "Read & Watch with AI/YouTube Transcripts",
   youtubeYtDlpCommand: ""
 };
 
@@ -584,6 +590,8 @@ export default class ContextualAIReaderPlugin extends Plugin {
   onunload() {
     this.videoChatControllers.forEach((controller) => controller.abort());
     this.videoChatControllers.clear();
+    this.currentKills.forEach((kill) => kill());
+    this.currentKills.clear();
     this.requestSerial++;
     if (this.autoTimer) {
       window.clearTimeout(this.autoTimer);
@@ -1726,19 +1734,26 @@ export default class ContextualAIReaderPlugin extends Plugin {
       return "groq";
     }
     if (configured === "openai" || configured === "auto") {
-      if (!this.settings.openaiApiKey.trim()) {
-        throw new Error("This video has no captions. Add a Groq or OpenAI API key for Whisper transcription, or disable this fallback.");
+      if (!this.getTranscriptionApiKey()) {
+        throw new Error("This video has no captions. Add a Groq or dedicated transcription API key for timestamped transcription, or disable this fallback.");
       }
       return "openai";
     }
     return "off";
   }
 
+  private getTranscriptionApiKey(): string {
+    if (this.settings.transcriptionApiKey.trim()) return this.settings.transcriptionApiKey.trim();
+    const chatBase = normalizeApiBaseUrl(this.settings.openaiBaseUrl, DEFAULT_SETTINGS.openaiBaseUrl);
+    const audioBase = normalizeApiBaseUrl(this.settings.transcriptionBaseUrl, DEFAULT_SETTINGS.transcriptionBaseUrl);
+    return chatBase === audioBase ? this.settings.openaiApiKey.trim() : "";
+  }
+
   private async requestYouTubeTranscription(
     audio: Buffer,
     backend: "groq" | "openai"
   ): Promise<TranscriptionResult> {
-    const model = backend === "groq" ? "whisper-large-v3-turbo" : "whisper-1";
+    const model = backend === "groq" ? "whisper-large-v3-turbo" : (this.settings.transcriptionModel.trim() || "whisper-1");
     const fields: Array<[string, string]> = [
       ["model", model],
       ["response_format", "verbose_json"],
@@ -1748,14 +1763,14 @@ export default class ContextualAIReaderPlugin extends Plugin {
       fields.push(["language", this.settings.sourceLanguage.split("-")[0]]);
     }
     const multipart = buildMultipartFormData(fields, "file", "audio.mp3", "audio/mpeg", audio);
-    const baseUrl = normalizeApiBaseUrl(this.settings.openaiBaseUrl, DEFAULT_SETTINGS.openaiBaseUrl);
+    const baseUrl = normalizeApiBaseUrl(this.settings.transcriptionBaseUrl, DEFAULT_SETTINGS.transcriptionBaseUrl);
     const response = await requestUrl({
       url: backend === "groq"
         ? "https://api.groq.com/openai/v1/audio/transcriptions"
         : `${baseUrl}/audio/transcriptions`,
       method: "POST",
       headers: {
-        Authorization: `Bearer ${backend === "groq" ? this.settings.youtubeGroqApiKey.trim() : this.settings.openaiApiKey.trim()}`,
+        Authorization: `Bearer ${backend === "groq" ? this.settings.youtubeGroqApiKey.trim() : this.getTranscriptionApiKey()}`,
         "Content-Type": `multipart/form-data; boundary=${multipart.boundary}`
       },
       body: toArrayBuffer(multipart.body),
@@ -2381,96 +2396,48 @@ export default class ContextualAIReaderPlugin extends Plugin {
   }
 
   private async runOpenAIPrompt(prompt: string): Promise<string> {
-    const apiKey = this.settings.openaiApiKey.trim();
-    if (!apiKey) {
-      throw new Error("OpenAI API key is not configured.");
-    }
-
-    const baseUrl = normalizeApiBaseUrl(this.settings.openaiBaseUrl, DEFAULT_SETTINGS.openaiBaseUrl);
-    const model = this.settings.openaiModel.trim() || DEFAULT_SETTINGS.openaiModel;
-    const response = await requestUrl({
-      url: `${baseUrl}/chat/completions`,
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: "Follow the user prompt exactly. Return only the requested content." },
-          { role: "user", content: prompt }
-        ],
-        temperature: 0.2
-      }),
-      throw: false
-    });
-
-    const data = parseOpenAIChatCompletionResult(response.json);
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(data?.error?.message || `OpenAI API HTTP ${response.status}`);
-    }
-
-    const usage = data?.usage;
-    if (usage) {
-      const cachedInput = usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens ?? 0;
-      this.recordTokenUsage({
-        cachedInput,
-        input: usage.prompt_tokens ?? 0,
-        output: usage.completion_tokens ?? 0,
-        reasoningOutput: 0
-      });
-    }
-
-    const content = data?.choices?.[0]?.message?.content;
-    return normalizeAITextContent(content);
+    return this.runApiTextPrompt(prompt, "openai");
   }
 
   private async runAnthropicPrompt(prompt: string): Promise<string> {
-    const apiKey = this.settings.anthropicApiKey.trim();
-    if (!apiKey) {
-      throw new Error("Anthropic API key is not configured.");
-    }
+    return this.runApiTextPrompt(prompt, "anthropic");
+  }
 
-    const baseUrl = normalizeApiBaseUrl(this.settings.anthropicBaseUrl, DEFAULT_SETTINGS.anthropicBaseUrl);
-    const model = this.settings.anthropicModel.trim() || DEFAULT_SETTINGS.anthropicModel;
-    const response = await requestUrl({
-      url: `${baseUrl}/messages`,
-      method: "POST",
-      headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 8192,
-        temperature: 0.2,
-        system: "Follow the user prompt exactly. Return only the requested content.",
-        messages: [
-          { role: "user", content: prompt }
-        ]
-      }),
-      throw: false
-    });
-
-    const data = parseAnthropicMessageResult(response.json);
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(data?.error?.message || `Anthropic API HTTP ${response.status}`);
-    }
-
-    const usage = data?.usage;
-    if (usage) {
-      const cachedInput = usage.cache_read_input_tokens ?? 0;
-      this.recordTokenUsage({
-        cachedInput,
-        input: (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + cachedInput,
-        output: usage.output_tokens ?? 0,
-        reasoningOutput: 0
+  private async runApiTextPrompt(prompt: string, backend: "openai" | "anthropic"): Promise<string> {
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    this.currentKills.add(cancel);
+    try {
+      return await runVideoChatAI({ ...this.getVideoChatBackendConfig(), backend }, prompt, [], controller.signal, async (request) => {
+        const response = await requestUrl(request);
+        if (response.status >= 200 && response.status < 300) {
+          if (backend === "openai") {
+            const usage = parseOpenAIChatCompletionResult(response.json)?.usage;
+            if (usage) this.recordTokenUsage({ cachedInput: usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens ?? 0,
+              input: usage.prompt_tokens ?? 0, output: usage.completion_tokens ?? 0, reasoningOutput: 0 });
+          } else {
+            const usage = parseAnthropicMessageResult(response.json)?.usage;
+            if (usage) this.recordTokenUsage({ cachedInput: usage.cache_read_input_tokens ?? 0,
+              input: (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0),
+              output: usage.output_tokens ?? 0, reasoningOutput: 0 });
+          }
+        }
+        return response;
       });
-    }
+    } finally { this.currentKills.delete(cancel); }
+  }
 
-    return normalizeAITextContent(data?.content);
+  async testApiConnection(withImage: boolean): Promise<string> {
+    const config = this.getVideoChatBackendConfig();
+    if (config.backend !== "openai" && config.backend !== "anthropic") throw new Error("Select an API backend first.");
+    // A synthetic 64x64 PNG tests the configured model without using vault content.
+    const frames = withImage ? [{ seconds: 0, png: new Uint8Array(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAb0lEQVR4nO3PAQkAAAyEwO9feoshgnABdLep8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3IPanc8OLDQitxAAAAAElFTkSuQmCC", "base64")) }] : [];
+    const controller = new AbortController();
+    this.videoChatControllers.add(controller);
+    try {
+      await runVideoChatAI(config, withImage ? "An image is attached. Reply briefly to confirm you can inspect it." : "Reply with OK.", frames, controller.signal, (request) => requestUrl(request));
+      return withImage ? "Image request accepted. Video frames can be sent to this model." : "Text request succeeded. Translation and text chat can use this API.";
+    } finally { this.videoChatControllers.delete(controller); }
   }
 
   stopCurrentTranslation() {
@@ -2711,6 +2678,9 @@ export default class ContextualAIReaderPlugin extends Plugin {
       return "anthropic";
     }
 
+    if (this.settings.openaiApiKey.trim()) return "openai";
+    if (this.settings.anthropicApiKey.trim()) return "anthropic";
+
     if (hasCodexCommand(this.settings.codexCommand)) {
       return "codex";
     }
@@ -2725,7 +2695,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
   private getBackendLabel(): string {
     const backend = this.getEffectiveBackend();
     if (backend === "claude") return "Claude Code";
-    if (backend === "openai") return "OpenAI API";
+    if (backend === "openai") return "OpenAI-compatible API";
     if (backend === "anthropic") return "Anthropic API";
     return "Codex";
   }
@@ -2744,7 +2714,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
       throw new Error(`Excerpt path exists but is not a file: ${path}`);
     }
 
-    return await this.app.vault.create(path, "# Contextual AI Reader Excerpts\n\n");
+    return await this.app.vault.create(path, "# Read & Watch with AI Excerpts\n\n");
   }
 
   private async ensureParentFolders(filePath: string) {
@@ -3498,13 +3468,13 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("AI backend")
-      .setDesc("Auto uses local Codex when available, then falls back to local Claude Code. API modes use the token configured below.")
+      .setDesc("Auto uses a configured API key first (OpenAI-compatible, then Anthropic), otherwise local Codex or Claude. Select an explicit backend to choose a particular provider.")
       .addDropdown((dropdown) =>
         dropdown
-          .addOption("auto", "Auto (Codex if available)")
+          .addOption("auto", "Auto (API key, then local CLI)")
           .addOption("codex", "Codex (ChatGPT plan)")
           .addOption("claude", "Claude Code (Claude plan)")
-          .addOption("openai", "OpenAI API token")
+          .addOption("openai", "OpenAI-compatible API (OpenAI, Gemini, OpenRouter…)")
           .addOption("anthropic", "Anthropic API token")
           .setValue(this.plugin.settings.aiBackend)
           .onChange(async (value) => {
@@ -3513,6 +3483,20 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
             this.display();
           })
       );
+
+    if (["openai", "anthropic"].includes(this.plugin.settings.aiBackend)) {
+      const result = containerEl.createDiv({ attr: { role: "status" } });
+      const check = async (images: boolean, button: { setDisabled: (value: boolean) => unknown }) => {
+        button.setDisabled(true); result.setText("Testing the configured API…");
+        try { result.setText(await this.plugin.testApiConnection(images)); }
+        catch (error) { result.setText(error instanceof Error ? error.message : String(error)); }
+        finally { button.setDisabled(false); }
+      };
+      new Setting(containerEl).setName("Test API connection")
+        .setDesc("Sends a small test request to your configured provider. The image test uses a synthetic image, not your notes or videos. Provider charges may apply.")
+        .addButton((button) => button.setButtonText("Test text").onClick(() => { void check(false, button); }))
+        .addButton((button) => button.setButtonText("Test image").onClick(() => { void check(true, button); }));
+    }
 
     new Setting(containerEl)
       .setName("Video chat Codex model")
@@ -3590,8 +3574,8 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
 
     if (this.plugin.settings.aiBackend === "openai") {
       new Setting(containerEl)
-        .setName("OpenAI API key")
-        .setDesc("Stored in this plugin's local Obsidian settings. Required only for OpenAI API mode.")
+        .setName("API key")
+        .setDesc("Stored in this plugin's local Obsidian settings. Use the key issued by the service at the base URL below.")
         .addText((text) => {
           text.inputEl.type = "password";
           text
@@ -3604,8 +3588,8 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
         });
 
       new Setting(containerEl)
-        .setName("OpenAI model")
-        .setDesc("Used by OpenAI API mode.")
+        .setName("API model")
+        .setDesc("Used for all AI text features and video chat. Choose a vision-capable model for screenshots.")
         .addText((text) =>
           text
             .setPlaceholder("gpt-4.1-mini")
@@ -3617,8 +3601,8 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
         );
 
       new Setting(containerEl)
-        .setName("OpenAI base URL")
-        .setDesc("Keep the default for OpenAI, or set an OpenAI-compatible endpoint.")
+        .setName("API base URL")
+        .setDesc("OpenAI: https://api.openai.com/v1 · Gemini: https://generativelanguage.googleapis.com/v1beta/openai · OpenRouter: https://openrouter.ai/api/v1. Use the matching key and model ID.")
         .addText((text) =>
           text
             .setPlaceholder("https://api.openai.com/v1")
@@ -3777,7 +3761,7 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
       .setDesc("Vault path where selected passages are saved.")
       .addText((text) =>
         text
-          .setPlaceholder("Contextual AI Reader Excerpts.md")
+          .setPlaceholder("Read & Watch with AI Excerpts.md")
           .setValue(this.plugin.settings.excerptFilePath)
           .onChange(async (value) => {
             this.plugin.settings.excerptFilePath = value.trim() || DEFAULT_SETTINGS.excerptFilePath;
@@ -3943,12 +3927,12 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("No-caption transcription")
-      .setDesc("When a video has no CC track, transcribe its audio with timestamped Whisper segments. Auto prefers Groq, then OpenAI.")
+      .setDesc("When a video has no CC track, transcribe its audio with timestamped Whisper segments. Auto prefers Groq, then the transcription API below. Chat-only providers may not support audio transcription.")
       .addDropdown((dropdown) =>
         dropdown
-          .addOption("auto", "Auto (Groq, then OpenAI)")
+          .addOption("auto", "Auto (Groq, then transcription API)")
           .addOption("groq", "Groq Whisper")
-          .addOption("openai", "OpenAI Whisper")
+          .addOption("openai", "OpenAI-compatible transcription")
           .addOption("off", "Disabled")
           .setValue(this.plugin.settings.youtubeTranscriptionBackend)
           .onChange(async (value) => {
@@ -3970,6 +3954,19 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
           });
         text.inputEl.type = "password";
       });
+
+    for (const field of [
+      { key: "transcriptionApiKey" as const, name: "Transcription API key", description: "Separate audio-service key. If empty, reuse the chat key only when both base URLs match.", secret: true },
+      { key: "transcriptionBaseUrl" as const, name: "Transcription API base URL", description: "Service supporting /audio/transcriptions and verbose_json with timestamped segments. Independent of the chat provider.", secret: false },
+      { key: "transcriptionModel" as const, name: "Transcription model", description: "A model that returns timestamped segments, such as whisper-1 on OpenAI.", secret: false }
+    ]) {
+      new Setting(containerEl).setName(field.name).setDesc(field.description).addText((text) => {
+        if (field.secret) text.inputEl.type = "password";
+        text.setValue(this.plugin.settings[field.key]).onChange(async (value) => {
+          this.plugin.settings[field.key] = value.trim(); await this.plugin.saveSettings();
+        });
+      });
+    }
 
     new Setting(containerEl)
       .setName("Speech language")
@@ -4562,23 +4559,6 @@ function parseAnthropicMessageResult(value: unknown): AnthropicMessageResult | u
 
 function normalizeApiBaseUrl(value: string, fallback: string): string {
   return (value.trim() || fallback).replace(/\/+$/, "");
-}
-
-function normalizeAITextContent(
-  content: string | Array<{ text?: string; type?: string }> | undefined
-): string {
-  if (typeof content === "string") {
-    return content;
-  }
-
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => part.text ?? "")
-      .join("")
-      .trim();
-  }
-
-  return "";
 }
 
 function buildMultipartFormData(
