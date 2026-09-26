@@ -177,7 +177,7 @@ const DEFAULT_SETTINGS: ContextualAIReaderSettings = {
   codexCommand: "",
   customPrompt: "",
   debounceMs: 450,
-  excerptFilePath: "Read & Watch with AI Excerpts.md",
+  excerptFilePath: "Read and Watch with AI Excerpts.md",
   includeTranslationInExcerpt: true,
   minSelectionChars: 2,
   model: "gpt-5.4-mini",
@@ -209,12 +209,12 @@ const DEFAULT_SETTINGS: ContextualAIReaderSettings = {
   transcriptionModel: "whisper-1",
   youtubeOriginalSubtitleColor: "#111111",
   youtubeOriginalSubtitleFontSize: 16,
-  youtubeScreenshotFolder: "Read & Watch with AI/YouTube Screenshots",
+  youtubeScreenshotFolder: "Read and Watch with AI/YouTube Screenshots",
   youtubeScreenshotWidth: 720,
   youtubeTranscriptionBackend: "auto",
   youtubeTranslationSubtitleColor: "#111111",
   youtubeTranslationSubtitleFontSize: 15,
-  youtubeTranscriptFolder: "Read & Watch with AI/YouTube Transcripts",
+  youtubeTranscriptFolder: "Read and Watch with AI/YouTube Transcripts",
   youtubeYtDlpCommand: ""
 };
 
@@ -2714,7 +2714,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
       throw new Error(`Excerpt path exists but is not a file: ${path}`);
     }
 
-    return await this.app.vault.create(path, "# Read & Watch with AI Excerpts\n\n");
+    return await this.app.vault.create(path, "# Read and Watch with AI Excerpts\n\n");
   }
 
   private async ensureParentFolders(filePath: string) {
@@ -3761,7 +3761,7 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
       .setDesc("Vault path where selected passages are saved.")
       .addText((text) =>
         text
-          .setPlaceholder("Read & Watch with AI Excerpts.md")
+          .setPlaceholder("Read and Watch with AI Excerpts.md")
           .setValue(this.plugin.settings.excerptFilePath)
           .onChange(async (value) => {
             this.plugin.settings.excerptFilePath = value.trim() || DEFAULT_SETTINGS.excerptFilePath;

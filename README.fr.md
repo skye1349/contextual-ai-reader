@@ -1,16 +1,16 @@
-# Read & Watch with AI en Français
+# Read and Watch with AI en Français
 
 [English](https://github.com/skye1349/contextual-ai-reader/blob/main/README.md) · [中文](https://github.com/skye1349/contextual-ai-reader/blob/main/README.zh-CN.md) · [日本語](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ja.md) · [한국어](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ko.md) · [Español](https://github.com/skye1349/contextual-ai-reader/blob/main/README.es.md) · [Deutsch](https://github.com/skye1349/contextual-ai-reader/blob/main/README.de.md)
 
 ## 1.2.0 : nouveau nom et configuration API
 
-**Contextual AI Reader** devient **Read & Watch with AI**. L’ID interne et l’URL du dépôt restent identiques pour conserver réglages, caches et historiques. Les chemins déjà enregistrés sont conservés ; les nouvelles installations utilisent le nouveau nom.
+**Contextual AI Reader** devient **Read and Watch with AI**. L’ID interne et l’URL du dépôt restent identiques pour conserver réglages, caches et historiques. Les chemins déjà enregistrés sont conservés ; les nouvelles installations utilisent le nouveau nom.
 
 Choisissez **OpenAI-compatible API** ou **Anthropic API token** dans **AI backend**, puis renseignez la clé, l’URL de base et le modèle correspondants. OpenAI : `https://api.openai.com/v1` ; Claude : `https://api.anthropic.com/v1`. Codex, Claude Code, Node.js et un abonnement CLI ne sont pas nécessaires. Cela couvre les sélections/textes PDF, le vocabulaire, les notes complètes et lots, les sous-titres, les résumés vidéo, les questions de suivi et les images. Les images nécessitent un modèle avec vision. **Test text / Test image** envoient de petits tests avec une image synthétique ; des frais peuvent s’appliquer.
 
 **Auto** privilégie la clé compatible OpenAI, puis Anthropic, puis les CLI locales. Choisissez explicitement **Codex** pour utiliser la connexion locale. La transcription sans sous-titres se configure séparément via **Transcription API key / base URL / model** ou Groq. Le service doit prendre en charge `/audio/transcriptions`, `verbose_json` et les segments horodatés. La clé de chat n’est réutilisée que si les deux URL de base correspondent. Une clé Claude ne permet pas d’appeler OpenAI Whisper. Les clés, protocoles et capacités des modèles ne sont pas interchangeables. L’extraction des CC, les captures et la lecture vocale système ne nécessitent pas de clé IA.
 
-Read & Watch with AI est un plugin Obsidian desktop pour la lecture assistée : traduction, explication de vocabulaire en contexte, lecture vocale, notes d'extraits, PDF sélectionnables et traduction de fichiers Markdown.
+Read and Watch with AI est un plugin Obsidian desktop pour la lecture assistée : traduction, explication de vocabulaire en contexte, lecture vocale, notes d'extraits, PDF sélectionnables et traduction de fichiers Markdown.
 
 ## Configuration requise et installation
 

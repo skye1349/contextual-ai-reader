@@ -6,7 +6,7 @@
 
 - [ ] Download the `contextual-ai-reader-pr-*` artifact from this PR's GitHub Actions run.
 - [ ] Unzip it into a test vault at `.obsidian/plugins/contextual-ai-reader/`.
-- [ ] Reload Obsidian and enable Read & Watch with AI.
+- [ ] Reload Obsidian and enable Read and Watch with AI.
 - [ ] Review the `Obsidian E2E` workflow screenshots/logs for macOS and Windows.
 - [ ] Test selection popup with `Command` on macOS or `Ctrl` on Windows/Linux.
 - [ ] Test vocabulary mode with the intended target language.

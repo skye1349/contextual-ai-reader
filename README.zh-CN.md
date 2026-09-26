@@ -1,10 +1,10 @@
-# Read & Watch with AI 中文文档
+# Read and Watch with AI 中文文档
 
 [English](https://github.com/skye1349/contextual-ai-reader/blob/main/README.md) · [日本語](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ja.md) · [한국어](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ko.md) · [Español](https://github.com/skye1349/contextual-ai-reader/blob/main/README.es.md) · [Français](https://github.com/skye1349/contextual-ai-reader/blob/main/README.fr.md) · [Deutsch](https://github.com/skye1349/contextual-ai-reader/blob/main/README.de.md)
 
 ## 1.2.0：新名称与 API 配置
 
-插件由 **Contextual AI Reader** 更名为 **Read & Watch with AI**。内部 ID 和仓库地址保持不变，已有安装、设置、字幕缓存和聊天记录继续可用。已有输出路径保留，新安装使用新名称。
+插件由 **Contextual AI Reader** 更名为 **Read and Watch with AI**。内部 ID 和仓库地址保持不变，已有安装、设置、字幕缓存和聊天记录继续可用。已有输出路径保留，新安装使用新名称。
 
 选择 **AI backend → OpenAI-compatible API** 或 **Anthropic API token**，填写对应服务的 key、base URL 和模型 ID。OpenAI 地址为 `https://api.openai.com/v1`，Claude 为 `https://api.anthropic.com/v1`。API 模式不需要 Codex、Claude Code、Node.js 或 CLI 会员，可用于选区/PDF 文本翻译、词汇解释、整篇与批量翻译、字幕翻译、视频总结、连续问答和图片提问。图片需要支持视觉的模型。**Test text** 和 **Test image** 可测试文字与图片请求；使用合成图片，不读取笔记，服务商可能计费。
 
@@ -14,7 +14,7 @@
 
 支持打开本地视频、识别 CC 字幕、导出带时间戳的字幕页面，并通过 **AI help** 总结视频、解释画面和连续追问。详见下方「本地视频与互动字幕」和「和 AI 讨论视频」。
 
-Read & Watch with AI 是一个 Obsidian 桌面端阅读辅助插件，支持 macOS、Windows 和 Linux。它可以在你阅读 Markdown、可选中文本的 PDF、外语书籍、长篇文章或 YouTube 字幕时，提供翻译、上下文生词解释、朗读、摘抄、生词本和整篇/批量翻译。
+Read and Watch with AI 是一个 Obsidian 桌面端阅读辅助插件，支持 macOS、Windows 和 Linux。它可以在你阅读 Markdown、可选中文本的 PDF、外语书籍、长篇文章或 YouTube 字幕时，提供翻译、上下文生词解释、朗读、摘抄、生词本和整篇/批量翻译。
 
 ## 系统要求与安装
 

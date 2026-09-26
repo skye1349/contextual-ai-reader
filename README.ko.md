@@ -1,16 +1,16 @@
-# Read & Watch with AI 한국어
+# Read and Watch with AI 한국어
 
 [English](https://github.com/skye1349/contextual-ai-reader/blob/main/README.md) · [中文](https://github.com/skye1349/contextual-ai-reader/blob/main/README.zh-CN.md) · [日本語](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ja.md) · [Español](https://github.com/skye1349/contextual-ai-reader/blob/main/README.es.md) · [Français](https://github.com/skye1349/contextual-ai-reader/blob/main/README.fr.md) · [Deutsch](https://github.com/skye1349/contextual-ai-reader/blob/main/README.de.md)
 
 ## 1.2.0: 새 이름과 API 설정
 
-**Contextual AI Reader**의 새 이름은 **Read & Watch with AI**입니다. 내부 ID와 저장소 주소는 유지하여 설정, 자막 캐시, 대화 기록을 계속 사용할 수 있습니다. 기존 출력 경로는 유지하고 신규 설치는 새 이름을 사용합니다.
+**Contextual AI Reader**의 새 이름은 **Read and Watch with AI**입니다. 내부 ID와 저장소 주소는 유지하여 설정, 자막 캐시, 대화 기록을 계속 사용할 수 있습니다. 기존 출력 경로는 유지하고 신규 설치는 새 이름을 사용합니다.
 
 **AI backend**에서 **OpenAI-compatible API** 또는 **Anthropic API token**을 선택하고 해당 서비스의 키, 기본 URL, 모델 ID를 입력하세요. OpenAI는 `https://api.openai.com/v1`, Claude는 `https://api.anthropic.com/v1`입니다. Codex, Claude Code, Node.js, CLI 구독 없이 선택 영역/PDF 텍스트 번역, 어휘 설명, 전체 노트·일괄 번역, 자막 번역, 영상 요약, 후속 질문, 이미지 질문을 사용할 수 있습니다. 이미지에는 시각 입력 지원 모델이 필요합니다. **Test text / Test image**는 간단한 연결 테스트를 보내며 합성 이미지를 사용합니다. 서비스 요금이 발생할 수 있습니다.
 
 **Auto**는 OpenAI 호환 키, Anthropic 키, 로컬 CLI 순으로 선택합니다. 키가 있어도 로컬 로그인을 사용하려면 **Codex**를 직접 선택하세요. 자막 없는 음성은 **Transcription API key / base URL / model** 또는 Groq를 별도로 설정합니다. `/audio/transcriptions`, `verbose_json`, 타임스탬프 구간을 지원하는 서비스가 필요합니다. 두 기본 URL이 같을 때만 채팅 키를 재사용합니다. Claude 키로 OpenAI Whisper를 호출할 수 없습니다. 임의의 키나 모델이 모든 기능을 지원하는 것은 아닙니다. CC 추출, 스크린샷, 시스템 읽어주기는 AI 키가 필요 없습니다.
 
-Read & Watch with AI는 Obsidian 데스크톱용 읽기 보조 플러그인입니다. 선택한 텍스트 번역, 문맥 기반 어휘 설명, 음성 읽기, 발췌 노트, PDF 선택 텍스트 번역, Markdown 파일 전체 번역을 지원합니다.
+Read and Watch with AI는 Obsidian 데스크톱용 읽기 보조 플러그인입니다. 선택한 텍스트 번역, 문맥 기반 어휘 설명, 음성 읽기, 발췌 노트, PDF 선택 텍스트 번역, Markdown 파일 전체 번역을 지원합니다.
 
 ## 시스템 요구 사항 및 설치
 

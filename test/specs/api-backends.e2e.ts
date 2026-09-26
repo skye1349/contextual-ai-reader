@@ -127,7 +127,7 @@ describe("API feature parity", function () {
       return { id: p.manifest.id, name: p.manifest.name, path: p.settings.excerptFilePath,
         folder: p.settings.youtubeTranscriptFolder, message: p.settings.videoChats["youtube:legacy"].messages[0].text };
     });
-    expect(result).toEqual({ id: "contextual-ai-reader", name: "Read & Watch with AI", path: "Contextual AI Reader Excerpts.md",
+    expect(result).toEqual({ id: "contextual-ai-reader", name: "Read and Watch with AI", path: "Contextual AI Reader Excerpts.md",
       folder: "Contextual AI Reader/YouTube Transcripts", message: "Keep this conversation" });
   });
 

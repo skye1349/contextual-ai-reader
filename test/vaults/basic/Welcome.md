@@ -1,4 +1,4 @@
-# Read & Watch with AI E2E Vault
+# Read and Watch with AI E2E Vault
 
 This paragraph gives the test vault a simple Markdown file that Obsidian can open while the plugin is loaded.
 

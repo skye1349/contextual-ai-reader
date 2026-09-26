@@ -47,7 +47,7 @@ The Pull Request workflow uploads an installable zip artifact.
    ```
 
 5. Reload Obsidian.
-6. Enable `Read & Watch with AI`.
+6. Enable `Read and Watch with AI`.
 7. Test the feature before merging.
 
 Use a test vault, not a vault with important notes, when validating file-writing features such as full-file translation or batch translation.

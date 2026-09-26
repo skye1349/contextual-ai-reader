@@ -1,6 +1,6 @@
 # Obsidian Community Plugin Submission
 
-Official guide: https://docs.obsidian.md/Plugins/Releasing/Submit+your+plugin
+Official guide: https://docs.obsidian.md/plugins/releasing/submit-plugin
 
 ## Current Requirements
 
@@ -44,9 +44,13 @@ Add this object to the end of `community-plugins.json` in `obsidianmd/obsidian-r
 ```json
 {
   "id": "contextual-ai-reader",
-  "name": "Read & Watch with AI",
+  "name": "Read and Watch with AI",
   "description": "Translate documents, learn from videos with bilingual subtitles, and turn screenshots and AI conversations into notes.",
   "author": "Taoye",
   "repo": "skye1349/contextual-ai-reader"
 }
 ```
+
+## Updating an existing listing
+
+Use the Obsidian Community account dashboard, not a pull request to obsidian-releases (pull requests are disabled there). Change the name in manifest.json, publish a release, then select **Check for new releases**. Names cannot contain ampersands; use **Read and Watch with AI**. See https://docs.obsidian.md/Reference/Manifest.
