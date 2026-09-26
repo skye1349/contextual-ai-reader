@@ -1,6 +1,6 @@
 {
   "name": "contextual-ai-reader",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Translate documents, learn from videos with bilingual subtitles, and turn screenshots and AI conversations into notes.",
   "main": "main.js",
   "scripts": {

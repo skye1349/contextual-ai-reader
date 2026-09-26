@@ -1,10 +1,10 @@
-# Read & Watch with AI
+# Read and Watch with AI
 
 [中文](https://github.com/skye1349/contextual-ai-reader/blob/main/README.zh-CN.md) · [日本語](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ja.md) · [한국어](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ko.md) · [Español](https://github.com/skye1349/contextual-ai-reader/blob/main/README.es.md) · [Français](https://github.com/skye1349/contextual-ai-reader/blob/main/README.fr.md) · [Deutsch](https://github.com/skye1349/contextual-ai-reader/blob/main/README.de.md)
 
 ## 1.2.0: new name and API setup
 
-Previously **Contextual AI Reader**, now **Read & Watch with AI**. The plugin ID and repository URL stay unchanged so existing installations, settings, cached subtitles, and chat histories continue to work. Saved output paths remain unchanged; fresh installs use the new name.
+Previously **Contextual AI Reader**, now **Read and Watch with AI**. The plugin ID and repository URL stay unchanged so existing installations, settings, cached subtitles, and chat histories continue to work. Saved output paths remain unchanged; fresh installs use the new name.
 
 Choose **AI backend → OpenAI-compatible API** or **Anthropic API token**, then enter your provider’s key, base URL and model ID. OpenAI uses `https://api.openai.com/v1`; Claude uses `https://api.anthropic.com/v1`. API mode does not need Codex, Claude Code, Node.js, or a CLI subscription. It covers selection/PDF text translation, vocabulary explanations, full-note and batch translation, subtitle translation, video summaries, follow-up chat and image questions. Use a vision-capable model for images. **Test text** and **Test image** send small connection checks (a synthetic image, not vault content). Provider charges may apply.
 
@@ -14,7 +14,7 @@ Choose **AI backend → OpenAI-compatible API** or **Anthropic API token**, then
 
 Open local videos with detected CC tracks, export timestamped transcript notes, and use **AI help** to summarize, explain frames, and ask follow-up questions. See [local video setup](#local-video-learning-player) and [video chat](#ask-ai-about-a-video).
 
-Read & Watch with AI is an Obsidian desktop reading companion for translation, contextual vocabulary, text-to-speech, excerpts, PDFs, Markdown, and language learning with local videos and YouTube transcripts.
+Read and Watch with AI is an Obsidian desktop reading companion for translation, contextual vocabulary, text-to-speech, excerpts, PDFs, Markdown, and language learning with local videos and YouTube transcripts.
 
 It supports configurable language direction: choose the language you are reading, or let the plugin auto-detect it, then choose the language you want to learn with. The default is auto-detect source language and Simplified Chinese as the target language.
 

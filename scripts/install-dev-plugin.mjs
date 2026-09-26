@@ -24,4 +24,4 @@ await cp(source, resolve(obsidianDir, "plugins", "contextual-ai-reader-dev"), {
   recursive: true
 });
 
-console.log(`Installed Read & Watch with AI Dev into ${vault}`);
+console.log(`Installed Read and Watch with AI Dev into ${vault}`);
