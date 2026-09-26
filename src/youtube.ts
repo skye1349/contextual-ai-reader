@@ -980,11 +980,14 @@ export class YouTubeLearningView extends ItemView {
 
     setRatio(this.splitRatio);
     let dragging = false;
+    let dragPointerId: number | undefined;
     const viewWindow = this.containerEl.win;
     resizer.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
       event.preventDefault();
       dragging = true;
+      dragPointerId = event.pointerId;
+      resizer.setPointerCapture(event.pointerId);
       shell.addClass("is-resizing");
       setFromClientX(event.clientX);
     });
@@ -994,16 +997,25 @@ export class YouTubeLearningView extends ItemView {
     const finishDragging = () => {
       if (!dragging) return;
       dragging = false;
+      if (dragPointerId !== undefined && resizer.hasPointerCapture(dragPointerId)) resizer.releasePointerCapture(dragPointerId);
+      dragPointerId = undefined;
       shell.removeClass("is-resizing");
     };
+    const handlePointerUp = (event: PointerEvent) => {
+      // Native webviews can swallow move events; commit the final release position too.
+      if (dragging) setFromClientX(event.clientX);
+      finishDragging();
+    };
+    resizer.addEventListener("lostpointercapture", finishDragging);
     viewWindow.addEventListener("pointermove", handlePointerMove);
-    viewWindow.addEventListener("pointerup", finishDragging);
+    viewWindow.addEventListener("pointerup", handlePointerUp);
     viewWindow.addEventListener("pointercancel", finishDragging);
     viewWindow.addEventListener("blur", finishDragging);
     this.panelResizerCleanup = () => {
       finishDragging();
       viewWindow.removeEventListener("pointermove", handlePointerMove);
-      viewWindow.removeEventListener("pointerup", finishDragging);
+      viewWindow.removeEventListener("pointerup", handlePointerUp);
+      resizer.removeEventListener("lostpointercapture", finishDragging);
       viewWindow.removeEventListener("pointercancel", finishDragging);
       viewWindow.removeEventListener("blur", finishDragging);
     };

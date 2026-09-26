@@ -281,6 +281,12 @@ process.stdout.write(JSON.stringify({
     });
     await browser.pause(300);
 
+    // A loaded native webview can swallow pointermove; exercise that real drag path.
+    await browser.waitUntil(async () => browser.executeObsidian(async ({ app }) => {
+      const leaf = app.workspace.getLeavesOfType("contextual-ai-reader-youtube")[0];
+      const webview = leaf.view.containerEl.querySelector("webview");
+      try { return await webview.executeJavaScript("document.readyState === 'complete'"); } catch { return false; }
+    }), { timeout: 30000 });
     const divider = browser.$('[data-video-id="layoutTst1A"] .youtube-reader-resizer');
     await expect(divider).toExist();
     const before = await browser.executeObsidian(({ app }) => {
