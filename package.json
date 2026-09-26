@@ -1,15 +1,18 @@
 {
   "name": "contextual-ai-reader",
-  "version": "1.0.13",
+  "version": "1.1.0",
   "description": "Multilingual AI reading companion for translation, contextual vocabulary, PDFs, and Markdown notes.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "build:private": "CCLT_PRIVATE_SHARED_MEMORY=true npm run build",
     "lint": "eslint src",
     "test": "tsx --test test/unit/*.test.ts",
     "build:dev-plugin": "npm run build && node scripts/build-dev.mjs",
     "install:dev-plugin": "npm run build:dev-plugin && node scripts/install-dev-plugin.mjs",
+    "install:private-plugin": "npm run build:private && node scripts/install-private-plugin.mjs",
+    "test:private-memory": "npm run build:private && CCLT_PRIVATE_SHARED_MEMORY_E2E=true wdio run ./wdio.conf.mts --mochaOpts.grep 'reuses an exact shared-memory YouTube translation before calling AI'",
     "test:e2e": "wdio run ./wdio.conf.mts"
   },
   "keywords": [

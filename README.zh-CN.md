@@ -2,6 +2,10 @@
 
 [English](https://github.com/skye1349/contextual-ai-reader/blob/main/README.md) · [日本語](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ja.md) · [한국어](https://github.com/skye1349/contextual-ai-reader/blob/main/README.ko.md) · [Español](https://github.com/skye1349/contextual-ai-reader/blob/main/README.es.md) · [Français](https://github.com/skye1349/contextual-ai-reader/blob/main/README.fr.md) · [Deutsch](https://github.com/skye1349/contextual-ai-reader/blob/main/README.de.md)
 
+## 1.1.0 新功能
+
+支持打开本地视频、识别 CC 字幕、导出带时间戳的字幕页面，并通过 **AI help** 总结视频、解释画面和连续追问。详见下方「本地视频与互动字幕」和「和 AI 讨论视频」。
+
 Contextual AI Reader 是一个 Obsidian 桌面端阅读辅助插件，支持 macOS、Windows 和 Linux。它可以在你阅读 Markdown、可选中文本的 PDF、外语书籍、长篇文章或 YouTube 字幕时，提供翻译、上下文生词解释、朗读、摘抄、生词本和整篇/批量翻译。
 
 ## 系统要求与安装
@@ -292,6 +296,20 @@ input ↑ output ↓ (total, cached)
 
 长文翻译时，进度窗口还会显示已运行时间、batch 进度、translation units 进度、原文段落进度、当前 token usage 和 Stop 按钮。
 
+## 本地视频与互动字幕
+
+在命令面板运行 `Open local video`，点击 Browse 选择文件，或粘贴绝对路径。视频可以位于 Vault 外，不会复制整个视频到笔记库。
+
+本地视频与 YouTube 共用学习界面：播放/暂停、窗口内全屏、逐句字幕跟随与点击跳转、AI 双语翻译、显示/隐藏字幕、停止翻译、截图、字幕笔记导出及翻译缓存。外部打开按钮会使用系统默认视频播放器。截图可复制到剪贴板，并按现有截图设置插入笔记。
+
+- 自动检测 MP4/MKV 等容器中的文本字幕（如 `mov_text`、SRT、ASS、WebVTT）；需要 `ffmpeg` 和同目录的 `ffprobe`。沿用设置中的 `ffmpeg command`，留空自动检测。
+- 自动寻找视频旁的同名字幕，例如 `lesson.mp4` 对应 `lesson.srt`、`lesson.en.srt`、`lesson.zh.vtt`。SRT/VTT 可直接读取，无需安装视频工具；ASS/SSA 通过 ffmpeg 转换。
+- 有多个字幕轨时，用工具栏的 Subtitle track 选择；默认按源语言设置或内嵌默认轨选择。切换字幕会重新加载视频并保留时间位置。
+- 点击文档按钮 `Create transcript note`，将完整字幕及已有译文导出到一个 Markdown 页面。每段都有时间戳，点击可以重新打开原本的本地视频并跳到对应位置。原文件移动或删除后，需要重新打开新路径的文件并重新导出。
+- 没有可读字幕时仍可播放和截图。点击麦克风按钮可使用设置中已配置的 Groq/OpenAI Whisper 服务转录；这会上传提取出的音频，打开本地视频本身不会自动上传音频或调用 AI。
+
+播放支持取决于 Obsidian 内置浏览器的解码能力；推荐 H.264/AAC MP4 或 WebM。不支持的编码需要先转换。PGS/VobSub 图片字幕、画面上烧录的字幕不属于可直接提取的文本 CC，需另配文本字幕或使用语音转录。
+
 ## YouTube 视频与互动字幕
 
 ![YouTube 视频、逐句双语字幕和生成的笔记](https://raw.githubusercontent.com/skye1349/contextual-ai-reader/main/docs/images/youtube-learning-player.png)
@@ -368,3 +386,16 @@ API key 会保存在插件的本地 Obsidian 设置数据中。不要把 vault �
 ## License
 
 MIT
+
+
+## 和 AI 讨论视频
+
+打开本地或 YouTube 视频后，点击字幕面板右上角的 **AI help**。可以点击 **Summarize video** 总结视频、**Explain this moment** 解释当前画面，也可以直接提问并连续追问。回答中的时间戳可以跳回视频，**Save chat to note** 会将聊天导出为独立的 Markdown 笔记。
+
+AI 会接收已加载的字幕、播放位置、近期对话，以及你选择的画面证据：当前截图（默认）、全片均匀抽取六帧，或仅字幕。图片会真正传给支持视觉的模型；这不是逐帧观看整段视频或直接理解音轨。没有字幕时，可以先使用播放器的麦克风功能转录。抽帧失败、字幕只覆盖部分内容时，界面会明确提示；长字幕总结会分段处理全部字幕，再合并总结。
+
+聊天沿用已配置的 AI 后端。设置中的 **Video chat Codex model** 可单独指定聊天模型，不会修改翻译模型；留空则沿用原模型。Codex/Claude 使用本机 CLI 登录，OpenAI/Anthropic 使用已有 API 配置。发送问题时才会向相应后端发送字幕及图片，打开聊天面板本身不会调用 AI。**Stop** 只停止当前聊天，不会打断翻译；API 请求停止后会忽略晚到的回复，但已发送的网络请求可能仍在服务端完成。
+
+聊天按视频分别保存在本地，保留最近 100 个视频、每个视频最多 200 条消息；每次请求在上下文预算内携带最多 30 条近期消息。截图临时使用，不写入聊天历史。清空聊天不会删除已经导出的笔记。
+
+请指定账号实际可用的模型；图片问答需要支持视觉输入的模型。历史图片不会重新附带。近期对话正文预算为 24,000 字符，超出的旧对话会被排除，目前没有自动生成长期摘要。本地内嵌字幕和时间线抽帧需要 ffmpeg/ffprobe，本地 SRT/VTT 外挂字幕不需要 yt-dlp。

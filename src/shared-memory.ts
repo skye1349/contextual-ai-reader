@@ -34,6 +34,7 @@ export interface SharedMemoryRequest {
   memoryEnabled?: boolean;
   pageUrl?: string;
   provider: string;
+  reuseExactMemory?: boolean;
   sourceLanguage: string;
   targetLanguage: string;
 }

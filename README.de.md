@@ -90,3 +90,20 @@ Dieses Plugin ist keine reine Offline-Übersetzung. Je nach Backend können ausg
 ## License
 
 MIT
+
+
+## Neu in 1.1.0: lokale Videos und KI-Chat
+
+Wähle **Open local video** in der Befehlspalette und öffne eine Datei oder füge ihren absoluten Pfad ein. Videos dürfen außerhalb des Vaults liegen. Wie bei YouTube stehen Wiedergabe, Navigation nach Untertitelsätzen, zweisprachige Untertitel, Übersetzungscache, Vollbild im Fenster, Screenshots und Notizexport zur Verfügung.
+
+- Passende Dateien wie `lesson.srt`, `lesson.en.srt` und `lesson.zh.vtt` werden automatisch erkannt. SRT/VTT benötigen keine zusätzlichen Werkzeuge. Eingebettete Textuntertitel erfordern **ffmpeg und ffprobe**, ASS/SSA erfordern ffmpeg. Über **Subtitle track** wählst du die Spur.
+- **Create transcript note** speichert Originaltext und vorhandene Übersetzungen in einer Markdown-Seite. Zeitmarken öffnen das Video an der passenden Stelle. Nach dem Verschieben der Originaldatei müssen die Links aktualisiert werden.
+- Ohne Untertitel kann die Mikrofontaste den Ton über den eingerichteten Groq/OpenAI-Whisper-Dienst transkribieren. Dabei wird Audio übertragen; beim bloßen Öffnen des Videos nicht. Bildbasierte oder ins Bild eingebrannte Untertitel lassen sich nicht als Text extrahieren. Die Wiedergabe hängt vom Codec ab; empfohlen sind H.264/AAC MP4 oder WebM.
+
+Klicke bei lokalen Videos oder YouTube oben rechts im Untertitelbereich auf **AI help**. Nutze **Summarize video**, **Explain this moment** oder eigene Fragen mit Rückfragen. Zeitmarken in Antworten springen zur Videostelle; **Save chat to note** exportiert den Chat.
+
+Die KI erhält Untertitel, Abspielposition, jüngste Nachrichten und ausgewählte Bilder: das aktuelle Bild, sechs über das Video verteilte Bilder oder nur Untertitel. Sie sieht nicht jeden Frame und hört nicht die gesamte Tonspur. Zusammenfassungen langer Transkripte verarbeiten alle Abschnitte; normale Fragen können nur relevante Auszüge erhalten. Fehler bei der Bilderfassung und unvollständiger Kontext werden angezeigt. Frühere Bilder werden nicht erneut angehängt.
+
+Der eingerichtete KI-Anbieter wird verwendet. **Video chat Codex model** legt nur das Chatmodell fest; leer übernimmt es das Übersetzungsmodell. Wähle ein für dein Konto verfügbares Modell und bei Bildern eines mit Bildunterstützung. Codex/Claude nutzen die Anmeldung der lokalen CLI, OpenAI/Anthropic die API-Schlüssel. Beim Senden einer Frage wird der Kontext an diesen Dienst übertragen. **Stop** stoppt nur den Chat; bereits gesendete API-Anfragen können auf dem Server weiterlaufen.
+
+Der Verlauf wird lokal je Video gespeichert: die letzten 100 Videos mit jeweils bis zu 200 Nachrichten. Jede Anfrage sendet höchstens 30 aktuelle Nachrichten mit insgesamt 24.000 Textzeichen erneut. Ältere Gespräche werden nicht automatisch zusammengefasst. Bilder werden nicht im Verlauf gespeichert. **Clear chat** löscht den Verlauf dieses Videos, aber keine exportierten Notizen. Bewahre `data.json` mit Einstellungen und Verlauf vertraulich auf.

@@ -90,3 +90,20 @@ Ce plugin n'est pas une traduction hors ligne. Selon le backend choisi, le texte
 ## License
 
 MIT
+
+
+## Nouveautés de 1.1.0 : vidéos locales et chat IA
+
+Lancez **Open local video** depuis la palette de commandes, puis choisissez un fichier ou collez son chemin absolu. Le fichier peut se trouver hors du coffre. Le lecteur partage avec YouTube la lecture, la navigation par phrase, les sous-titres bilingues, le cache de traduction, le plein écran dans la fenêtre, les captures et l’export de notes.
+
+- Les fichiers associés tels que `lesson.srt`, `lesson.en.srt` et `lesson.zh.vtt` sont détectés automatiquement. SRT/VTT ne nécessitent aucun outil externe. Les pistes de texte intégrées nécessitent **ffmpeg et ffprobe** ; ASS/SSA nécessitent ffmpeg. Choisissez la piste avec **Subtitle track**.
+- **Create transcript note** enregistre le texte original et les traductions disponibles dans une page Markdown. Les horodatages rouvrent la vidéo au bon endroit. Déplacer le fichier original nécessite de mettre à jour les liens.
+- Sans sous-titres, le bouton microphone permet une transcription avec le service Groq/OpenAI Whisper configuré. Cette opération transmet l’audio ; ouvrir la vidéo ne le transmet pas. Les sous-titres graphiques ou gravés dans l’image ne sont pas extraits comme texte. La lecture dépend des codecs ; MP4 H.264/AAC ou WebM sont recommandés.
+
+Cliquez sur **AI help** en haut à droite du panneau de sous-titres, pour une vidéo locale ou YouTube. Utilisez **Summarize video**, **Explain this moment**, ou posez des questions successives. Les horodatages des réponses permettent de naviguer ; **Save chat to note** exporte la conversation.
+
+L’IA reçoit les sous-titres, la position, la conversation récente et les images choisies : l’image actuelle, six images réparties dans la vidéo, ou uniquement les sous-titres. Elle ne regarde pas toutes les images et n’écoute pas directement toute la bande-son. Les longs résumés traitent tous les segments de transcription ; les questions ordinaires peuvent utiliser seulement des extraits pertinents. Les échecs de capture et la couverture partielle sont signalés. Les anciennes images ne sont pas jointes de nouveau.
+
+Le fournisseur IA configuré est utilisé. **Video chat Codex model** définit uniquement le modèle du chat ; vide, il reprend celui de traduction. Choisissez un modèle disponible pour votre compte, compatible avec les images si nécessaire. Codex/Claude utilisent la connexion de la CLI locale ; OpenAI/Anthropic utilisent les clés API. Envoyer une question transmet le contexte au fournisseur. **Stop** arrête seulement le chat ; une requête API déjà envoyée peut se terminer côté serveur.
+
+L’historique est enregistré localement par vidéo : les 100 vidéos les plus récentes, jusqu’à 200 messages chacune. Chaque requête retransmet au maximum 30 messages récents et 24 000 caractères de texte. Les anciens échanges ne sont pas résumés automatiquement. Les images ne sont pas conservées dans l’historique. **Clear chat** efface la conversation de cette vidéo, sans supprimer les notes exportées. Gardez confidentiel `data.json`, qui contient les réglages et l’historique.

@@ -90,3 +90,20 @@ Este complemento no es un traductor offline. Según el backend elegido, el texto
 ## License
 
 MIT
+
+
+## Novedades de 1.1.0: vídeos locales y chat con IA
+
+Ejecuta **Open local video** en la paleta de comandos y elige un archivo o pega su ruta absoluta. Puede estar fuera de la bóveda. Comparte con YouTube la reproducción, los saltos por frase, los subtítulos bilingües, la caché de traducción, la pantalla completa dentro de la ventana, las capturas y la exportación de notas.
+
+- Detecta archivos como `lesson.srt`, `lesson.en.srt` y `lesson.zh.vtt`. SRT/VTT no requieren herramientas externas. Los subtítulos de texto incrustados necesitan **ffmpeg y ffprobe**; ASS/SSA necesitan ffmpeg. Elige la pista con **Subtitle track**.
+- **Create transcript note** guarda el original y las traducciones disponibles en una página Markdown. Las marcas de tiempo vuelven al punto correspondiente del vídeo. Si mueves el archivo original, tendrás que actualizar los enlaces.
+- Sin subtítulos, el botón del micrófono permite transcribir con Groq/OpenAI Whisper previamente configurado. Esta acción envía audio; abrir el vídeo no lo envía. No se extraen como texto los subtítulos gráficos o incrustados en la imagen. La reproducción depende del códec; se recomiendan MP4 H.264/AAC o WebM.
+
+Pulsa **AI help** arriba a la derecha del panel de subtítulos de un vídeo local o de YouTube. Usa **Summarize video**, **Explain this moment** o escribe preguntas y continúa la conversación. Las marcas de tiempo de las respuestas permiten navegar; **Save chat to note** exporta la conversación.
+
+La IA recibe subtítulos, posición, conversación reciente y las imágenes seleccionadas: el fotograma actual, seis fotogramas repartidos por el vídeo o solo subtítulos. No ve cada fotograma ni escucha todo el audio. Los resúmenes de transcripciones largas procesan todos los fragmentos; las preguntas normales pueden usar solo extractos relevantes. Se indican los fallos de captura y la cobertura parcial. Las imágenes anteriores no se adjuntan de nuevo.
+
+Se utiliza el proveedor de IA configurado. **Video chat Codex model** cambia solo el modelo del chat; vacío hereda el de traducción. Elige un modelo disponible para tu cuenta y con visión si envías imágenes. Codex/Claude utilizan la sesión de la CLI local; OpenAI/Anthropic, las claves API. Al enviar una pregunta se envían las pruebas a ese servicio. **Stop** detiene solo el chat; una petición API ya enviada puede terminar en el servidor.
+
+El historial se guarda localmente por vídeo: los 100 vídeos más recientes, hasta 200 mensajes cada uno. Cada consulta reenvía hasta 30 mensajes recientes y 24.000 caracteres de texto. No hay resumen automático de conversaciones antiguas. Las imágenes no se guardan en el historial. **Clear chat** borra esa conversación, pero conserva las notas exportadas. Mantén privado `data.json`, que contiene ajustes e historial.
