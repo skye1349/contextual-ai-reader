@@ -115,3 +115,7 @@ La IA recibe subtítulos, posición, conversación reciente y las imágenes sele
 Se utiliza el proveedor de IA configurado. **Video chat Codex model** cambia solo el modelo del chat; vacío hereda el de traducción. Elige un modelo disponible para tu cuenta y con visión si envías imágenes. Codex/Claude utilizan la sesión de la CLI local; OpenAI/Anthropic, las claves API. Al enviar una pregunta se envían las pruebas a ese servicio. **Stop** detiene solo el chat; una petición API ya enviada puede terminar en el servidor.
 
 El historial se guarda localmente por vídeo: los 100 vídeos más recientes, hasta 200 mensajes cada uno. Cada consulta reenvía hasta 30 mensajes recientes y 24.000 caracteres de texto. No hay resumen automático de conversaciones antiguas. Las imágenes no se guardan en el historial. **Clear chat** borra esa conversación, pero conserva las notas exportadas. Mantén privado `data.json`, que contiene ajustes e historial.
+
+## Guardar el chat de vídeo
+
+**Save chat to note** guarda todos los mensajes disponibles la primera vez y después añade solo los mensajes aún no guardados. El botón **Save answer** de cada respuesta de IA guarda únicamente esa respuesta al pulsarlo. Ambas acciones comparten el archivo de destino y evitan duplicados. Configure **Chat note folder** y **Chat note filename** para elegir una carpeta de la bóveda y un archivo Markdown nuevo o existente; `{video}` representa el título del vídeo. Se conserva el contenido existente y se siguen los cambios de nombre realizados en Obsidian. El guardado en notas es siempre manual.

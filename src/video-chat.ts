@@ -2,6 +2,7 @@ import type { YouTubeVideoData, YouTubeSegment } from "./youtube";
 
 export type VideoChatVisualMode = "none" | "current" | "overview";
 export interface VideoChatMessage {
+  id?: string;
   role: "user" | "assistant";
   text: string;
   time: number;
@@ -111,7 +112,7 @@ export function validateVideoChatRecords(value: unknown): Record<string, VideoCh
     if (!Array.isArray(record.messages)) continue;
     const messages = record.messages.filter((m): m is VideoChatMessage => Boolean(m && ["user", "assistant"].includes(m.role)
       && typeof m.text === "string" && Number.isFinite(m.time) && Number.isFinite(m.createdAt)))
-      .slice(-200).map((m) => ({ role: m.role, text: m.text.slice(0, 50_000), time: m.time, createdAt: m.createdAt, context: typeof m.context === "string" ? m.context.slice(0, 2000) : undefined }));
+      .slice(-200).map((m) => ({ id: typeof m.id === "string" ? m.id : undefined, role: m.role, text: m.text.slice(0, 50_000), time: m.time, createdAt: m.createdAt, context: typeof m.context === "string" ? m.context.slice(0, 2000) : undefined }));
     records[key] = { title: typeof record.title === "string" ? record.title : "Video", updatedAt: Number(record.updatedAt) || 0, messages };
   }
   return records;

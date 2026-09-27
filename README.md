@@ -356,3 +356,7 @@ Chat uses the configured AI backend. **Video chat Codex model** can override the
 History is saved locally per video (the latest 100 videos, up to 200 messages each); each request includes up to 30 recent messages within the context budget. Images are temporary and are not stored in chat history. Clearing chat removes that video's saved conversation; exported notes remain independent.
 
 Choose a model available to your account; image questions require vision support. Prior images are not reattached. The recent-history budget is 24,000 text characters; older conversation is omitted rather than automatically summarized. Local embedded captions and timeline frame sampling require ffmpeg/ffprobe; local SRT/VTT sidecars do not require yt-dlp.
+
+## Saving video chat
+
+**Save chat to note** writes all currently available messages the first time and appends only unsaved messages on later clicks. Each AI response has a **Save answer** button that saves only that response when clicked. Both actions share the same destination and deduplication, so saving the full chat later does not repeat individually saved answers. In settings, use **Chat note folder** and **Chat note filename** to choose a vault folder and a new or existing Markdown note; `{video}` inserts the video title. Existing note content is preserved. Renaming the note in Obsidian keeps the saved destination linked. Chat history remains stored separately; saving to a note is always manual.

@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { App, Component, MarkdownRenderer, Notice, setIcon } from "obsidian";
 import type { YouTubeVideoData } from "./youtube";
 import { chatTimestamp, VideoChatAnswer, VideoChatMessage, VideoChatRequest, VideoChatVisualMode } from "./video-chat";
@@ -85,7 +86,7 @@ export class VideoChatPanel extends Component {
     this.stopButton = this.button(actions, "Stop", () => this.stop());
     this.stopButton.disabled = true;
     const exportButton = this.button(actions, "Save chat to note", () => { void this.host.exportNote(this.data, this.messages).catch((error: unknown) => new Notice(String(error))); });
-    exportButton.setAttribute("title", "Export this conversation to a Markdown note");
+    exportButton.setAttribute("title", "Save all chat messages; later saves append only new messages to the same note");
     this.button(actions, "Clear chat", () => {
       this.stop(); this.messages = []; this.renderMessages(); void this.persist();
       this.status.setText("Chat cleared for this video.");
@@ -112,6 +113,15 @@ export class VideoChatPanel extends Component {
       const label = row.createDiv({ cls: "video-chat-message-label" });
       label.createEl("strong", { text: message.role === "user" ? "You" : "AI" });
       this.button(label, chatTimestamp(message.time), () => this.seek(message.time));
+      if (message.role === "assistant") {
+        const save = this.button(label, "Save answer", () => {
+          save.disabled = true;
+          void this.host.exportNote(this.data, [{ ...message }])
+            .catch((error: unknown) => new Notice(String(error)))
+            .finally(() => { save.disabled = false; });
+        });
+        save.setAttribute("title", "Append only this AI answer to your configured chat note");
+      }
       const body = row.createDiv({ cls: "video-chat-message-body" });
       if (message.role === "user") { body.setText(message.text); body.addClass("is-plain-text"); }
       else {
@@ -159,7 +169,7 @@ export class VideoChatPanel extends Component {
     const history = this.messages.map((m) => ({ ...m }));
     const time = this.getTime();
     const visualMode = this.visualSelect.value as VideoChatVisualMode;
-    this.messages.push({ role: "user", text: question, time, createdAt: Date.now() });
+    this.messages.push({ id: randomUUID(), role: "user", text: question, time, createdAt: Date.now() });
     this.messages = this.messages.slice(-200);
     this.input.value = ""; this.draft = ""; this.renderMessages();
     this.setBusy(true); this.status.setText("Preparing video context…");
@@ -170,7 +180,7 @@ export class VideoChatPanel extends Component {
         if (serial === this.serial && !this.disposed) this.status.setText(text);
       });
       if (serial !== this.serial || controller.signal.aborted || this.disposed) return;
-      this.messages.push({ role: "assistant", text: answer.text, time, createdAt: Date.now(), context: answer.context });
+      this.messages.push({ id: randomUUID(), role: "assistant", text: answer.text, time, createdAt: Date.now(), context: answer.context });
       this.messages = this.messages.slice(-200);
       this.renderMessages(); await this.persist();
       this.status.setText(answer.context);

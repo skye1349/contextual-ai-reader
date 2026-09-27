@@ -1,3 +1,4 @@
+import { appendChatMessages, chatNotePath } from "./video-chat-notes";
 import { VideoChatAnswer, VideoChatFrame, VideoChatMessage, VideoChatRecord, VideoChatRequest, buildVideoChatPrompt, chatTimestamp, frameSampleTimes, selectVideoTranscript, transcriptChunks, validateVideoChatRecords, videoChatKey } from "./video-chat";
 import { VideoChatBackendConfig, checkChatAbort, runVideoChatAI, runVideoChatProcess } from "./video-chat-backend";
 import { chooseLocalCaptionTrack, inspectLocalVideo, localVideoResourceUrl, normalizeLocalVideoPath, readLocalCaptionTrack } from "./local-video";
@@ -117,6 +118,9 @@ type YouTubeTranscriptionBackend = "auto" | "groq" | "openai" | "off";
 interface ContextualAIReaderSettings {
   videoChats: Record<string, VideoChatRecord>;
   videoChatCodexModel: string;
+  videoChatNoteFolder: string;
+  videoChatNoteFilename: string;
+  videoChatNoteTargets: Record<string, string>;
   aiBackend: AIBackend;
   autoTranslate: boolean;
   batchChunkChars: number;
@@ -169,6 +173,9 @@ interface ContextualAIReaderSettings {
 const DEFAULT_SETTINGS: ContextualAIReaderSettings = {
   videoChats: {},
   videoChatCodexModel: "",
+  videoChatNoteFolder: "Read and Watch with AI/Video Chats",
+  videoChatNoteFilename: "{video} AI Chat.md",
+  videoChatNoteTargets: {},
   aiBackend: "auto",
   autoTranslate: true,
   batchChunkChars: 30000,
@@ -350,6 +357,7 @@ export default class ContextualAIReaderPlugin extends Plugin {
   settings: ContextualAIReaderSettings = DEFAULT_SETTINGS;
   private videoChatControllers = new Set<AbortController>();
   private videoChatSaveQueue: Promise<void> = Promise.resolve();
+  private videoChatExportQueue: Promise<void> = Promise.resolve();
   private autoTimer?: number;
   private commandSelectionGestureUntil = 0;
   private currentKills = new Set<() => void>();
@@ -368,6 +376,16 @@ export default class ContextualAIReaderPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+      let changed = false;
+      for (const [key, path] of Object.entries(this.settings.videoChatNoteTargets)) {
+        if (path === oldPath || path.startsWith(`${oldPath}/`)) {
+          this.settings.videoChatNoteTargets[key] = file.path + path.slice(oldPath.length);
+          changed = true;
+        }
+      }
+      if (changed) void this.saveSettings().catch((error: unknown) => console.error("Could not save chat note location", error));
+    }));
     void this.migrateYouTubeCacheToSharedMemory().catch((error) => {
       console.warn("Existing YouTube translations were not migrated to shared memory.", error);
     });
@@ -604,6 +622,13 @@ export default class ContextualAIReaderPlugin extends Plugin {
     const loadedData: unknown = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, isRecord(loadedData) ? loadedData : {});
     this.settings.videoChats = validateVideoChatRecords(this.settings.videoChats);
+    if (isRecord(loadedData) && !Object.prototype.hasOwnProperty.call(loadedData, "videoChatNoteFolder") && typeof loadedData.youtubeTranscriptFolder === "string") {
+      this.settings.videoChatNoteFolder = loadedData.youtubeTranscriptFolder;
+    }
+    this.settings.videoChatNoteTargets = Object.fromEntries(Object.entries(this.settings.videoChatNoteTargets || {}).filter(([, path]) => typeof path === "string"));
+    for (const key of ["videoChatNoteFolder", "videoChatNoteFilename"] as const) {
+      if (typeof this.settings[key] !== "string") this.settings[key] = DEFAULT_SETTINGS[key];
+    }
     this.settings.vocabularyCache = { ...(this.settings.vocabularyCache ?? {}) };
     this.settings.youtubeCache = { ...(this.settings.youtubeCache ?? {}) };
     this.configureSharedMemory();
@@ -1381,19 +1406,34 @@ export default class ContextualAIReaderPlugin extends Plugin {
   }
 
   private async exportVideoChatNote(data: YouTubeVideoData, messages: VideoChatMessage[]) {
-    if (!messages.length) { new Notice("Start a conversation before saving it to a note."); return; }
-    const folder = normalizeYouTubeFolder(this.settings.youtubeTranscriptFolder, DEFAULT_SETTINGS.youtubeTranscriptFolder);
-    const path = await this.getAvailableVaultPath(`${folder}/${sanitizeFileName(data.title)} AI Chat.md`);
-    await this.ensureParentFolders(path);
-    const lines = [`# ${data.title} — AI chat`, "", `Source: [Video](${videoSourceUrl(data)})`, ""];
-    for (const message of messages) {
-      lines.push(`## ${message.role === "user" ? "You" : "AI"} · [${chatTimestamp(message.time)}](${videoTimestampUri(data, message.time)})`, "", message.text, "");
-      if (message.context) lines.push(`Evidence: ${message.context}`, "");
-    }
-    const file = await this.app.vault.create(path, lines.join("\n"));
-    const leaf = this.app.workspace.getLeaf("split", "vertical"); await leaf.openFile(file);
-    this.lastMarkdownLeaf = leaf;
-    new Notice(`Saved video chat: ${path}`);
+    const snapshot = messages.map((message) => ({ ...message }));
+    const task = this.videoChatExportQueue.catch(() => undefined).then(async () => {
+      if (!snapshot.length) { new Notice("Start a conversation before saving it to a note."); return; }
+      const base = chatNotePath(this.settings.videoChatNoteFolder, this.settings.videoChatNoteFilename, sanitizeFileName(data.title));
+      const key = JSON.stringify([videoChatKey(data), this.settings.videoChatNoteFolder, this.settings.videoChatNoteFilename]);
+      let path = this.settings.videoChatNoteTargets[key];
+      if (!path) {
+        path = base;
+        this.settings.videoChatNoteTargets[key] = path;
+        await this.saveSettings();
+      }
+      await this.ensureParentFolders(path);
+      const existing = this.app.vault.getAbstractFileByPath(path);
+      if (existing && (!(existing instanceof TFile) || existing.extension !== "md")) throw new Error("The chat note target must be a Markdown file.");
+      const file = existing instanceof TFile ? existing : await this.app.vault.create(path, "");
+      let count = 0;
+      await this.app.vault.process(file, (content) => {
+        const result = appendChatMessages(content, videoChatKey(data), snapshot,
+          `# ${data.title} — AI chat\n\nSource: [Video](${videoSourceUrl(data)})`,
+          (message) => `## ${message.role === "user" ? "You" : "AI"} · [${chatTimestamp(message.time)}](${videoTimestampUri(data, message.time)})\n\n${message.text}${message.context ? `\n\nEvidence: ${message.context}` : ""}`);
+        count = result.count;
+        return result.text;
+      });
+      await this.openExcerptFile(file);
+      new Notice(count ? `Saved ${count} new chat message(s): ${path}` : `Already saved — no new messages: ${path}`);
+    });
+    this.videoChatExportQueue = task;
+    await task;
   }
 
   private async openLocalVideoPlayer(input: string, startSeconds = 0) {
@@ -3497,6 +3537,17 @@ class ContextualAIReaderSettingTab extends PluginSettingTab {
         .addButton((button) => button.setButtonText("Test text").onClick(() => { void check(false, button); }))
         .addButton((button) => button.setButtonText("Test image").onClick(() => { void check(true, button); }));
     }
+
+    new Setting(containerEl).setName("Chat note folder")
+      .setDesc("Folder inside this vault. Leave empty to save at the vault root. New save destinations use this folder.")
+      .addText((text) => text.setValue(this.plugin.settings.videoChatNoteFolder).onChange(async (value) => {
+        this.plugin.settings.videoChatNoteFolder = value.trim(); await this.plugin.saveSettings();
+      }));
+    new Setting(containerEl).setName("Chat note filename")
+      .setDesc("Use {video} for one note per video, or an existing filename to append there. Repeated saves add only new messages. Save answer appends only the selected AI response.")
+      .addText((text) => text.setPlaceholder("{video} AI Chat.md").setValue(this.plugin.settings.videoChatNoteFilename).onChange(async (value) => {
+        this.plugin.settings.videoChatNoteFilename = value.trim() || DEFAULT_SETTINGS.videoChatNoteFilename; await this.plugin.saveSettings();
+      }));
 
     new Setting(containerEl)
       .setName("Video chat Codex model")

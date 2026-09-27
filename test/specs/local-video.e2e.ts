@@ -123,6 +123,22 @@ const ffmpeg = process.env.LOCAL_VIDEO_FFMPEG || (process.platform === "darwin" 
     await browser.$('[aria-label="Ask about this video"]').setValue("Can you explain that more simply?");
     await browser.$('.video-chat-actions [aria-label="Send"]').click();
     await browser.waitUntil(async () => (await browser.$$(".video-chat-message.is-assistant")).length === 2);
+    const beforeSave = await browser.executeObsidian(({ app }) => app.vault.getFiles().filter((file) => file.path.endsWith("AI Chat.md")).length);
+    expect(beforeSave).toBe(0);
+    const saveAnswers = await browser.$$('.video-chat-message.is-assistant [aria-label="Save answer"]');
+    expect(saveAnswers.length).toBe(2);
+    await saveAnswers[1].click();
+    await browser.waitUntil(async () => browser.executeObsidian(async ({ app }) => {
+      const note = app.vault.getFiles().find((file) => file.path.endsWith("AI Chat.md"));
+      return !!note && (await app.vault.read(note)).includes("The lesson has two sentences.");
+    }));
+    const selectedAnswer = await browser.executeObsidian(async ({ app }) => {
+      const note = app.vault.getFiles().find((file) => file.path.endsWith("AI Chat.md"));
+      return app.vault.read(note);
+    });
+    expect(selectedAnswer).not.toContain("Can you explain that more simply?");
+    expect(selectedAnswer).not.toContain("What is happening in this frame?");
+    expect(selectedAnswer.split("The lesson has two sentences.").length).toBe(2);
     const result = await browser.executeObsidian(async ({ app }) => {
       const plugin = app.plugins.plugins["contextual-ai-reader"];
       const view = app.workspace.getLeavesOfType("contextual-ai-reader-youtube")[0].view;
